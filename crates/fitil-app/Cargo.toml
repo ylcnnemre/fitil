@@ -1,0 +1,18 @@
+[package]
+name = "fitil-app"
+description = "The Fitil desktop application."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "fitil"
+path = "src/main.rs"
+
+[dependencies]
+fluent-bundle.workspace = true
+iced.workspace = true
+sys-locale.workspace = true
+unic-langid.workspace = true

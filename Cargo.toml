@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+repository = "https://github.com/ylcnnemre/fitil"
+publish = false
+
+[workspace.dependencies]
+fluent-bundle = "0.16"
+iced = "0.14"
+sys-locale = "0.3"
+unic-langid = "0.9"

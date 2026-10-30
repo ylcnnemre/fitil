@@ -1,0 +1,10 @@
+[package]
+name = "fitil-chart"
+description = "The Fitil chart engine and drawing tools."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]

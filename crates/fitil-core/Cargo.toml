@@ -1,0 +1,10 @@
+[package]
+name = "fitil-core"
+description = "Shared data types for Fitil: candles, symbols and timeframes."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
