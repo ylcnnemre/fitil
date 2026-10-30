@@ -10,7 +10,22 @@ repository = "https://github.com/ylcnnemre/fitil"
 publish = false
 
 [workspace.dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+directories = "6"
+fitil-core = { path = "crates/fitil-core" }
+fitil-exchange = { path = "crates/fitil-exchange" }
+fitil-store = { path = "crates/fitil-store" }
 fluent-bundle = "0.16"
-iced = "0.14"
+futures = "0.3"
+iced = { version = "0.14", features = ["tokio"] }
+# rustls with `ring` as the crypto provider; the default aws-lc provider is avoided for licensing.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 sys-locale = "0.3"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "time"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 unic-langid = "0.9"

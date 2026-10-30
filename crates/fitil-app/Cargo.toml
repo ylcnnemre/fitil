@@ -12,7 +12,14 @@ name = "fitil"
 path = "src/main.rs"
 
 [dependencies]
+chrono.workspace = true
+directories.workspace = true
+fitil-core.workspace = true
+fitil-exchange.workspace = true
+fitil-store.workspace = true
 fluent-bundle.workspace = true
+futures.workspace = true
 iced.workspace = true
 sys-locale.workspace = true
+tokio = { workspace = true, features = ["rt"] }
 unic-langid.workspace = true

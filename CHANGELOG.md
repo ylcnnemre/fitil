@@ -11,3 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Project skeleton: a Cargo workspace and an empty application window with a Turkish and English UI.
 - Design document ([docs/TASARIM.md](docs/TASARIM.md)).
 - Continuous integration on Windows, macOS and Linux, with dependency license checks.
+- Binance Spot and USDⓈ-M perpetual market data:
+  - symbol lists, 24-hour tickers and candle history,
+  - live tickers and candles over WebSocket, with automatic reconnects,
+  - request-weight tracking and clock-offset correction.
+- Local SQLite candle cache. Each candle is downloaded once; gaps after a reconnect are filled.
+- Custom timeframes (such as 45m, 3h, 2d) built from Binance's own timeframes.
+- Watchlist with live prices sorted by dollar volume, symbol search, and a symbol detail
+  panel showing the open candle, its countdown and the cache contents, with paging back
+  through older candles.

@@ -1,1 +1,400 @@
 //! Local SQLite storage for Fitil: candle cache, drawings, layouts and settings.
+//!
+//! Callers keep every candle series contiguous: they only add candles right before
+//! the oldest or right after the newest stored one, so a series has no holes.
+
+use std::path::Path;
+
+use fitil_core::{Candle, SeriesKey};
+use rusqlite::{Connection, OptionalExtension, params};
+
+/// Schema changes, applied in order. `PRAGMA user_version` records how many have run,
+/// so a cache written by an older Fitil is upgraded in place instead of being lost.
+const MIGRATIONS: &[&str] = &["
+    CREATE TABLE candles (
+        market TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        timeframe TEXT NOT NULL,
+        open_time INTEGER NOT NULL,
+        open REAL NOT NULL,
+        high REAL NOT NULL,
+        low REAL NOT NULL,
+        close REAL NOT NULL,
+        volume REAL NOT NULL,
+        quote_volume REAL NOT NULL,
+        trades INTEGER NOT NULL,
+        taker_buy_volume REAL NOT NULL,
+        PRIMARY KEY (market, symbol, timeframe, open_time)
+    ) WITHOUT ROWID;
+
+    CREATE TABLE series (
+        market TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        timeframe TEXT NOT NULL,
+        history_start INTEGER,
+        PRIMARY KEY (market, symbol, timeframe)
+    ) WITHOUT ROWID;
+"];
+
+#[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    #[error("database error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("could not create the data folder: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("the cache was created by a newer Fitil (schema {found}, this version knows {known})")]
+    NewerSchema { found: u32, known: u32 },
+}
+
+pub type Result<T> = std::result::Result<T, StoreError>;
+
+/// What is stored for one series.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SeriesRange {
+    pub oldest: i64,
+    pub newest: i64,
+    pub count: u64,
+}
+
+pub struct Store {
+    conn: Connection,
+}
+
+impl Store {
+    /// Opens the cache at `path`, creating it and its folder if needed.
+    pub fn open(path: &Path) -> Result<Self> {
+        if let Some(folder) = path.parent() {
+            std::fs::create_dir_all(folder)?;
+        }
+        let conn = Connection::open(path)?;
+        conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        Self::migrate(conn)
+    }
+
+    pub fn open_in_memory() -> Result<Self> {
+        Self::migrate(Connection::open_in_memory()?)
+    }
+
+    fn migrate(mut conn: Connection) -> Result<Self> {
+        let applied: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        let known = MIGRATIONS.len() as u32;
+        if applied > known {
+            return Err(StoreError::NewerSchema {
+                found: applied,
+                known,
+            });
+        }
+        let tx = conn.transaction()?;
+        for migration in &MIGRATIONS[applied as usize..] {
+            tx.execute_batch(migration)?;
+        }
+        tx.pragma_update(None, "user_version", known)?;
+        tx.commit()?;
+        Ok(Self { conn })
+    }
+
+    /// Stores candles, replacing any with the same open time.
+    pub fn save_candles(&mut self, key: &SeriesKey, candles: &[Candle]) -> Result<()> {
+        let (market, symbol, timeframe) = columns(key);
+        let tx = self.conn.transaction()?;
+        {
+            let mut insert = tx.prepare_cached(
+                "INSERT OR REPLACE INTO candles
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            )?;
+            for c in candles {
+                insert.execute(params![
+                    market,
+                    symbol,
+                    timeframe,
+                    c.open_time,
+                    c.open,
+                    c.high,
+                    c.low,
+                    c.close,
+                    c.volume,
+                    c.quote_volume,
+                    c.trades as i64,
+                    c.taker_buy_volume,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Candles opening between `from` and `to` (both inclusive), oldest first.
+    pub fn candles(&self, key: &SeriesKey, from: i64, to: i64) -> Result<Vec<Candle>> {
+        let (market, symbol, timeframe) = columns(key);
+        let mut query = self.conn.prepare_cached(
+            "SELECT open_time, open, high, low, close, volume, quote_volume, trades, taker_buy_volume
+             FROM candles
+             WHERE market = ?1 AND symbol = ?2 AND timeframe = ?3 AND open_time BETWEEN ?4 AND ?5
+             ORDER BY open_time",
+        )?;
+        let rows = query.query_map(params![market, symbol, timeframe, from, to], read_candle)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The newest `limit` candles, oldest first.
+    pub fn latest_candles(&self, key: &SeriesKey, limit: usize) -> Result<Vec<Candle>> {
+        let (market, symbol, timeframe) = columns(key);
+        let mut query = self.conn.prepare_cached(
+            "SELECT open_time, open, high, low, close, volume, quote_volume, trades, taker_buy_volume
+             FROM candles
+             WHERE market = ?1 AND symbol = ?2 AND timeframe = ?3
+             ORDER BY open_time DESC
+             LIMIT ?4",
+        )?;
+        let rows = query.query_map(
+            params![market, symbol, timeframe, limit as i64],
+            read_candle,
+        )?;
+        let mut candles = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        candles.reverse();
+        Ok(candles)
+    }
+
+    /// The oldest and newest stored open times and the number of candles, if any are stored.
+    pub fn range(&self, key: &SeriesKey) -> Result<Option<SeriesRange>> {
+        let (market, symbol, timeframe) = columns(key);
+        let range = self.conn.query_row(
+            "SELECT MIN(open_time), MAX(open_time), COUNT(*)
+             FROM candles
+             WHERE market = ?1 AND symbol = ?2 AND timeframe = ?3",
+            params![market, symbol, timeframe],
+            |row| {
+                let oldest: Option<i64> = row.get(0)?;
+                let newest: Option<i64> = row.get(1)?;
+                let count: i64 = row.get(2)?;
+                Ok(oldest.zip(newest).map(|(oldest, newest)| SeriesRange {
+                    oldest,
+                    newest,
+                    count: count as u64,
+                }))
+            },
+        )?;
+        Ok(range)
+    }
+
+    /// Open time of the exchange's first candle for this series, once the cache reaches it.
+    pub fn history_start(&self, key: &SeriesKey) -> Result<Option<i64>> {
+        let (market, symbol, timeframe) = columns(key);
+        let start = self
+            .conn
+            .query_row(
+                "SELECT history_start FROM series
+                 WHERE market = ?1 AND symbol = ?2 AND timeframe = ?3",
+                params![market, symbol, timeframe],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(start.flatten())
+    }
+
+    /// Records that the exchange has no candles before `open_time` for this series.
+    pub fn set_history_start(&mut self, key: &SeriesKey, open_time: i64) -> Result<()> {
+        let (market, symbol, timeframe) = columns(key);
+        self.conn.execute(
+            "INSERT INTO series (market, symbol, timeframe, history_start) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (market, symbol, timeframe) DO UPDATE SET history_start = excluded.history_start",
+            params![market, symbol, timeframe, open_time],
+        )?;
+        Ok(())
+    }
+
+    /// Removes every stored candle and note about this series.
+    pub fn clear_series(&mut self, key: &SeriesKey) -> Result<()> {
+        let (market, symbol, timeframe) = columns(key);
+        let tx = self.conn.transaction()?;
+        for table in ["candles", "series"] {
+            tx.execute(
+                &format!(
+                    "DELETE FROM {table} WHERE market = ?1 AND symbol = ?2 AND timeframe = ?3"
+                ),
+                params![market, symbol, timeframe],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
+
+fn columns(key: &SeriesKey) -> (&'static str, &str, String) {
+    (key.market.id(), &key.symbol, key.timeframe.to_string())
+}
+
+fn read_candle(row: &rusqlite::Row) -> rusqlite::Result<Candle> {
+    Ok(Candle {
+        open_time: row.get(0)?,
+        open: row.get(1)?,
+        high: row.get(2)?,
+        low: row.get(3)?,
+        close: row.get(4)?,
+        volume: row.get(5)?,
+        quote_volume: row.get(6)?,
+        trades: row.get::<_, i64>(7)? as u64,
+        taker_buy_volume: row.get(8)?,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fitil_core::Market;
+    use std::path::PathBuf;
+
+    fn key(timeframe: &str) -> SeriesKey {
+        SeriesKey {
+            market: Market::Spot,
+            symbol: "BTCUSDT".into(),
+            timeframe: timeframe.parse().unwrap(),
+        }
+    }
+
+    fn candle(hour: i64, close: f64) -> Candle {
+        Candle {
+            open_time: hour * 3_600_000,
+            open: close - 1.0,
+            high: close + 1.0,
+            low: close - 2.0,
+            close,
+            volume: 1.5,
+            quote_volume: close * 1.5,
+            trades: 42,
+            taker_buy_volume: 0.5,
+        }
+    }
+
+    /// A database file in the temp folder, removed when dropped.
+    struct TempDb(PathBuf);
+
+    impl TempDb {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("fitil-store-{}-{name}", std::process::id()))
+                .join("cache.sqlite");
+            Self(path)
+        }
+    }
+
+    impl Drop for TempDb {
+        fn drop(&mut self) {
+            if let Some(folder) = self.0.parent() {
+                let _ = std::fs::remove_dir_all(folder);
+            }
+        }
+    }
+
+    #[test]
+    fn saves_and_reads_candles_in_order() {
+        let mut store = Store::open_in_memory().unwrap();
+        let candles = [candle(3, 30.0), candle(1, 10.0), candle(2, 20.0)];
+        store.save_candles(&key("1h"), &candles).unwrap();
+
+        let all = store.candles(&key("1h"), 0, i64::MAX).unwrap();
+        assert_eq!(all, vec![candles[1], candles[2], candles[0]]);
+        assert_eq!(
+            store
+                .candles(&key("1h"), 2 * 3_600_000, 2 * 3_600_000)
+                .unwrap(),
+            vec![candles[2]]
+        );
+        assert_eq!(
+            store.latest_candles(&key("1h"), 2).unwrap(),
+            vec![candles[2], candles[0]]
+        );
+        assert!(store.candles(&key("4h"), 0, i64::MAX).unwrap().is_empty());
+    }
+
+    #[test]
+    fn saving_the_same_open_time_replaces_the_candle() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.save_candles(&key("1h"), &[candle(1, 10.0)]).unwrap();
+        store.save_candles(&key("1h"), &[candle(1, 11.0)]).unwrap();
+
+        assert_eq!(
+            store.candles(&key("1h"), 0, i64::MAX).unwrap(),
+            vec![candle(1, 11.0)]
+        );
+    }
+
+    #[test]
+    fn reports_the_stored_range() {
+        let mut store = Store::open_in_memory().unwrap();
+        assert_eq!(store.range(&key("1h")).unwrap(), None);
+
+        store
+            .save_candles(
+                &key("1h"),
+                &[candle(5, 1.0), candle(6, 1.0), candle(7, 1.0)],
+            )
+            .unwrap();
+        let range = store.range(&key("1h")).unwrap().unwrap();
+        assert_eq!(
+            (range.oldest, range.newest, range.count),
+            (5 * 3_600_000, 7 * 3_600_000, 3)
+        );
+    }
+
+    #[test]
+    fn remembers_where_history_starts() {
+        let mut store = Store::open_in_memory().unwrap();
+        assert_eq!(store.history_start(&key("1d")).unwrap(), None);
+
+        store
+            .set_history_start(&key("1d"), 1_502_928_000_000)
+            .unwrap();
+        store
+            .set_history_start(&key("1d"), 1_502_928_000_001)
+            .unwrap();
+        assert_eq!(
+            store.history_start(&key("1d")).unwrap(),
+            Some(1_502_928_000_001)
+        );
+        assert_eq!(store.history_start(&key("1h")).unwrap(), None);
+    }
+
+    #[test]
+    fn clearing_a_series_leaves_others_alone() {
+        let mut store = Store::open_in_memory().unwrap();
+        store.save_candles(&key("1h"), &[candle(1, 1.0)]).unwrap();
+        store.save_candles(&key("4h"), &[candle(4, 1.0)]).unwrap();
+        store.set_history_start(&key("1h"), 0).unwrap();
+
+        store.clear_series(&key("1h")).unwrap();
+        assert_eq!(store.range(&key("1h")).unwrap(), None);
+        assert_eq!(store.history_start(&key("1h")).unwrap(), None);
+        assert!(store.range(&key("4h")).unwrap().is_some());
+    }
+
+    #[test]
+    fn reopening_keeps_the_data() {
+        let db = TempDb::new("reopen");
+        {
+            let mut store = Store::open(&db.0).unwrap();
+            store.save_candles(&key("1h"), &[candle(1, 10.0)]).unwrap();
+        }
+        let store = Store::open(&db.0).unwrap();
+        assert_eq!(
+            store.candles(&key("1h"), 0, i64::MAX).unwrap(),
+            vec![candle(1, 10.0)]
+        );
+    }
+
+    #[test]
+    fn refuses_a_cache_from_a_newer_version() {
+        let db = TempDb::new("newer");
+        drop(Store::open(&db.0).unwrap());
+        Connection::open(&db.0)
+            .unwrap()
+            .pragma_update(None, "user_version", 99)
+            .unwrap();
+
+        match Store::open(&db.0) {
+            Err(StoreError::NewerSchema { found: 99, .. }) => {}
+            other => panic!("expected NewerSchema, got {:?}", other.err()),
+        }
+    }
+}

@@ -4,32 +4,38 @@
 
 ## Neredeyiz?
 
-- **Tasarım:** `docs/TASARIM.md` proje sahibi tarafından onaylandı.
-- **Faz 1, Adım 1 tamamlandı:** geliştirme ortamı, proje iskeleti, GitHub deposu, otomatik derleme.
-  - Depo: https://github.com/ylcnnemre/fitil (herkese açık)
-  - İlk CI çalışması Windows, macOS ve Linux'ta yeşil. Format, clippy, testler ve cargo-deny geçiyor.
-  - Uygulama şu an boş bir pencere gösteriyor:
-    - İlk açılışta sistem dilini seçiyor (Türkçe ya da İngilizce), Türkçe/English düğmeleriyle dil değişiyor.
-    - Koyu tema, sürüm numarası görünüyor.
+- **Tasarım:** `docs/TASARIM.md` onaylı.
+- **Adım 1 tamamlandı:** iskelet, GitHub deposu, CI.
+- **Adım 2 tamamlandı:** Binance bağlantısı ve yerel depo. Ayrıntılar `03-gunluk.md` dosyasında.
 
-## Sıradaki adım: Adım 2, Binance bağlantısı ve yerel depo
+Uygulama şu an şunları gösteriyor:
+- Solda canlı fiyat listesi: Spot ve Vadeli sekmeleri, arama, dolar hacmine göre ilk 100 sembol.
+- Sağda seçilen sembolün ayrıntıları:
+  - zaman dilimi seçici (özel zaman dilimleri dahil),
+  - açık mum ve kapanışa kalan süre,
+  - önbellek bilgisi ve "Daha eski mumları yükle" düğmesi.
+- Altta durum çubuğu: bağlantı durumu, istek ağırlığı, saat farkı, önbellek yolu, sürüm.
 
-Proje sahibine anlatıldı, başlamak için onayı bekleniyor. Plan:
+## Proje sahibinin denemesi beklenenler
 
-1. **`fitil-core`:** Mum (OHLCV, işlem sayısı, taker alış hacmi), sembol (piyasa, fiyat hassasiyeti) ve zaman dilimi tipleri. Özel zaman dilimleri, ona tam bölünen en büyük hazır zaman diliminden üretilir.
-2. **`fitil-exchange`, Binance adaptörü** (Spot ve USDT-M):
-   - sembol listesi (exchangeInfo),
-   - geçmiş mumlar 1000'erli sayfalarla,
-   - WebSocket ile açık mum ve tüm sembollerin fiyatları,
-   - kopunca yeniden bağlanma ve boşluk doldurma,
-   - istek limiti takibi (`X-MBX-USED-WEIGHT-1M`),
-   - sunucu saati farkı,
-   - 451 erişim engeli için anlaşılır hata.
-3. **`fitil-store`:** SQLite mum önbelleği, uygulama klasöründe. İnen mum tekrar indirilmez.
-4. **Testler:** Kaydedilmiş gerçek Binance yanıtlarıyla. İnternete bağlı değil, CI'da çalışır.
-5. **Görünen sonuç:**
-   - Canlı fiyat listesi: sembol, fiyat, 24 saatlik değişim yüzdesi.
-   - Bir sembole tıklanınca geçmiş mumlar indirilir ve özet gösterilir: mum sayısı, en eski tarih. İkinci tıklamada veri önbellekten gelir.
-   - İnternet kesilip gelince otomatik toparlanma.
+Bunları Claude tıklayamadığı için deneyemedi:
+- Zaman dilimini 45m gibi özel bir değere çevirmek.
+- Vadeli sekmesi.
+- Arama kutusu.
+- English düğmesi.
+- İnterneti kesip geri açınca durum çubuğunun "Bağlantı koptu…" deyip toparlanması.
 
-**Teknik not:** TLS için `rustls` kullanılacak, kripto sağlayıcısı `ring` olacak. Varsayılan aws-lc'nin lisansları GPL ile sorun çıkarabilir, cargo-deny ile kontrol edilmeli.
+Veri katmanı ise gerçek Binance'e karşı testlerle doğrulandı.
+
+## Sıradaki adım: Adım 3, grafik motoru
+
+Henüz başlanmadı, proje sahibinin onayı bekleniyor. Taslak plan:
+- `fitil-chart` crate'i:
+  - iced Canvas üzerinde mum çizimi,
+  - fiyat ve zaman eksenleri,
+  - fare tekerleğiyle yakınlaştırma, sürükleyerek kaydırma, eksen sürükleyerek ölçekleme,
+  - artı imleci ve OHLC bilgisi,
+  - son fiyat çizgisi ve geri sayım.
+- Grafik sola kaydırıldıkça `data::load_older` ile otomatik geçmiş yükleme. Şu an bu iş bir düğmeyle yapılıyor.
+- Ayrıntı panelindeki metin bilgilerinin yerini grafik alacak.
+- Özel zaman dilimlerinde baştaki eksik mum atlanacak: `aggregate` ilk ve son kovayı yarım üretebiliyor.

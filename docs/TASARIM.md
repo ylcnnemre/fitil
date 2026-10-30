@@ -241,7 +241,9 @@ Her borsa aynı ortak arayüzü uygular. Yeni bir borsa eklemek, uygulamanın ge
 ### 6.3 Verilerin saklandığı yer
 
 Her işletim sisteminin standart uygulama klasörü kullanılır:
-- **Windows:** `%APPDATA%\Fitil`
+- **Windows:**
+  - Ayarlar, çizimler ve düzenler: `%APPDATA%\Fitil`.
+  - Mum önbelleği (`cache.sqlite`): `%LOCALAPPDATA%\Fitil`. Büyüyebilen önbellek, şirket ağlarındaki dolaşan profillerle başka bilgisayarlara kopyalanmasın diye burada durur.
 - **macOS:** `~/Library/Application Support/Fitil`
 - **Linux:** `~/.local/share/fitil`
 

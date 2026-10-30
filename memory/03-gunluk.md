@@ -81,4 +81,59 @@ Yapılan her şey tarih sırasıyla burada. En yeni kayıt en altta.
 - `gh repo create ylcnnemre/fitil --public` ile depo açıldı.
 - İlk commit `3c480ef` gönderildi. İlk CI çalışması 5 işin hepsinde yeşil.
 
-**Son olarak:** Proje sahibi "bir sonraki adımda ne yapıyoruz" diye sordu. Adım 2'nin planı anlatıldı (ayrıntı `02-durum.md`'de). Başlamak için onay bekleniyor.
+**Son olarak:** Proje sahibi "bir sonraki adımda ne yapıyoruz" diye sordu. Adım 2'nin planı anlatıldı ve proje sahibi "Evet, başla" dedi.
+
+### Adım 2: Binance bağlantısı ve yerel depo (tamamlandı)
+
+**Önce doğrulananlar** (Binance belgeleri ve canlı istekler):
+- **Vadeli WebSocket adresi değişti:** 23 Nisan 2026'dan beri eski `wss://fstream.binance.com/stream` çalışmıyor. Mum ve mini-ticker akışları artık `wss://fstream.binance.com/market/stream` adresinden geliyor.
+- **Spot `!ticker@arr` kaldırıldı:** 26 Mart 2026'da emekliye ayrıldı. Yerine `!miniTicker@arr` kullanılıyor.
+- **Sadece `endTime` ile mum isteği:** O zamana kadarki son `limit` mumu döndürüyor. Listelemeden öncesi istenirse daha az mum geliyor, bu da geçmişin başına ulaşıldığını gösteriyor.
+- **Binance'in 3d mumları** epoch'a göre 1 gün kaymalı hizalı. Bu yüzden 3d, özel zaman dilimlerine kaynak yapılmıyor.
+- **Mum akışı sadece işlem olunca güncelleme gönderiyor.** USDTIDR gibi az işlem gören paritelerde saniyelerce mesaj gelmeyebiliyor.
+- **Vadelide yeni sözleşme tipi:** `TRADIFI_PERPETUAL` (örneğin XAUUSDT). Perpetual olarak dahil edildi.
+
+**Yazılanlar:**
+- **`fitil-core`:**
+  - `Candle` (taker alış hacmi dahil), `Market` (Spot, UsdMFutures), `Symbol`, `Ticker`, `SeriesKey`.
+  - `Timeframe`: ayrıştırma, kovaya hizalama, `best_source` ve `aggregate`.
+  - 11 test.
+- **`fitil-store`:**
+  - SQLite, `user_version` ile şema göçü (migration), WAL modu.
+  - Mum kaydetme ve okuma, aralık, geçmiş başlangıcı ve seri silme işlemleri.
+  - 7 test.
+- **`fitil-exchange`:**
+  - `BinanceClient`: sembol listesi, 24 saatlik ticker, mumlar, saat senkronu, istek ağırlığı takibi, 429/418/451 hataları.
+  - `run_feed`: WebSocket, abone olma ve abonelikten çıkma, 30 saniye sessizlikte bağlantıyı ölü sayma, 1-2-4-8-16-30 saniye aralıklarla yeniden bağlanma.
+  - TLS için rustls ve ring kullanılıyor.
+  - Testler:
+    - 15 birim testi, kaydedilmiş gerçek yanıtlarla (`tests/fixtures/binance/`).
+    - 2 canlı test (`--ignored`).
+- **`fitil-app`:**
+  - `data.rs`:
+    - önbellek önce, eksikler Binance'ten,
+    - 50 istekten büyük boşlukta seri sıfırdan indirilir,
+    - açık mum ayrıca çekilir.
+  - `view.rs`: üç bölümlü ekran.
+  - `format.rs`: dile göre sayı biçimi.
+  - `error.rs`: hatalar Fluent anahtarlarına bağlanır.
+  - Bir canlı test, veri katmanını uçtan uca doğruluyor.
+- **Diğer:**
+  - Önbellek konumu: Windows'ta `%LOCALAPPDATA%\Fitil\cache.sqlite`. `docs/TASARIM.md` §6.3 buna göre güncellendi.
+  - `deny.toml`: `CDLA-Permissive-2.0` eklendi (HTTPS kök sertifika listesinin veri lisansı), `allow-wildcard-paths` açıldı.
+
+**Ekran denemesinden çıkan düzeltmeler:**
+- **Sıralama:** Sembol listesi farklı para birimlerindeki hacimleri doğrudan karşılaştırdığı için USDTIDR en üstte çıkıyordu. Hacimler artık dolara çevrilip sıralanıyor.
+- **Hizalama:** Liste altındaki sayım metni kenara yapışıktı, düzeltildi.
+- **Açık mum:** Az işlem gören paritelerde açık mum hiç görünmüyordu. Sembol açılırken açık mum REST ile de çekiliyor.
+
+**Test araçları:**
+- `scripts/capture-window.ps1` artık PrintWindow kullanıyor: pencere arkadayken de çalışıyor ve kullanıcının odağını çalmıyor.
+- PostMessage ile tıklama denendi ama iced bu tıklamaları almadı. Betik silindi.
+- Arayüzdeki tıklama akışlarını proje sahibi deniyor. İlk denemesinde USDTIDR seçme ve eski mum yükleme çalıştı.
+
+**Doğrulama:**
+- Toplam 41 test geçiyor.
+- 3 canlı test geçti: REST, WebSocket (vadelinin yeni adresi dahil) ve veri katmanı.
+- fmt, clippy ve cargo-deny temiz.
+- Debug derlemede bellek yaklaşık 206 MB.

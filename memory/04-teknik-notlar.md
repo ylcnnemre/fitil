@@ -17,9 +17,40 @@
 
 Claude ekranı doğrudan göremez. Arayüzde bir değişiklikten sonra:
 
-1. Uygulama başlatılır: `Start-Process target\debug\fitil.exe`.
-2. Pencerenin görüntüsü alınır: `scripts/capture-window.ps1 -OutFile <yol>.png`. Betik sadece Fitil penceresini yakalar.
-3. PNG dosyası Read aracıyla açılıp incelenir. Görüntü dosyası depoya değil, oturumun scratchpad klasörüne yazılır.
+1. **Başlat:** Eski süreç kapatılır, uygulama başlatılır: `Start-Process target\debug\fitil.exe`. Çalışan bir `fitil.exe` varken `cargo build` dosyanın üzerine yazamaz.
+2. **Görüntü al:** `scripts/capture-window.ps1 -OutFile <yol>.png` çalıştırılır.
+   - Betik PrintWindow kullanır: Fitil penceresi başka pencerelerin arkasında olsa da görüntü alınır.
+   - Proje sahibi o sırada bilgisayarı kullanıyor olabilir. Pencereyi öne getirmek veya gerçek fareyi oynatmak yasak.
+3. **İncele:** PNG dosyası Read aracıyla açılır. Görüntü dosyası depoya değil, oturumun scratchpad klasörüne yazılır.
+
+**Tıklama yok:** iced, PostMessage ile gönderilen tıklamaları kabul etmiyor. Bu yüzden tıklama gerektiren akışları proje sahibi dener. Mantık birim testleri ve canlı testlerle doğrulanır.
+
+**Spot sembol listesi yavaş:** Debug derlemede spot exchangeInfo büyük olduğu için açılışta yaklaşık 10–15 saniye sürüyor. Release derlemede çok daha hızlı.
+
+## Binance notları
+
+- **REST adresleri:**
+  - Spot: `https://api.binance.com/api/v3`, istek ağırlığı limiti 6000/dk.
+  - Vadeli: `https://fapi.binance.com/fapi/v1`, limit 2400/dk.
+  - Limitler exchangeInfo'dan okunur.
+- **WebSocket adresleri:**
+  - Spot: `wss://stream.binance.com:9443/stream`.
+  - Vadeli: `wss://fstream.binance.com/market/stream`. 2026-04-23'ten beri `/market` yolu şart. Derinlik ve bookTicker akışları ise `/public` yolunda.
+- **İstek ağırlıkları:**
+  - Spot: exchangeInfo 20, tüm tickerlar 80, klines 2.
+  - Vadeli: exchangeInfo 1, tickerlar 40, klines (limit 1000) 5.
+- **`!ticker@arr` yok:** Spot'ta 2026-03-26'da emekliye ayrıldı. Tüm semboller için `!miniTicker@arr` kullanılır.
+- **Mum akışı:** Güncelleme sadece işlem olunca gelir. Açık mum ayrıca REST'ten çekilir.
+- **Mum sayfalama:** Sadece `endTime` verilirse o zamana kadarki son `limit` mum döner. Dönen mum sayısı `limit`ten azsa geçmişin başına ulaşılmıştır.
+
+## Canlı testler
+
+İnternet gerektiren testler varsayılan olarak atlanır. Elle şöyle çalıştırılır:
+
+```bash
+cargo test -p fitil-exchange -- --ignored   # REST + WebSocket, iki piyasa
+cargo test -p fitil-app -- --ignored        # veri katmanı uçtan uca
+```
 
 ## Sık kullanılan komutlar
 
@@ -47,19 +78,36 @@ Bir Cargo workspace olarak kuruldu, ayrıntısı `docs/TASARIM.md` §6.1'de.
 
 Yeni bir dil eklemek için `locales/` altına yeni bir klasör açılır, dosya çevrilir ve dil kodu `fitil-app` içindeki dil listesine eklenir.
 
-## Kullanılan kütüphane sürümleri (Adım 1)
+## Kullanılan kütüphane sürümleri
 
-| Kütüphane | Sürüm |
-|---|---|
-| iced | 0.14 |
-| fluent-bundle | 0.16 |
-| unic-langid | 0.9 |
-| sys-locale | 0.3 |
+| Kütüphane | Sürüm | Not |
+|---|---|---|
+| iced | 0.14 | `tokio` özelliği açık |
+| fluent-bundle | 0.16 | |
+| unic-langid | 0.9 | |
+| sys-locale | 0.3 | |
+| tokio | 1 | |
+| reqwest | 0.13 | `default-features = false`, `rustls-no-provider` |
+| rustls | 0.23 | Sadece `ring`. aws-lc lisans sebebiyle kullanılmıyor. Sağlayıcı `fitil_exchange::install_crypto_provider` ile kuruluyor. |
+| tokio-tungstenite | 0.30 | `rustls-tls-native-roots` |
+| rusqlite | 0.41 | `bundled`: SQLite kaynaktan derleniyor |
+| serde, serde_json | 1 | |
+| thiserror | 2 | |
+| chrono | 0.4 | Yerel saat dilimi için |
+| directories | 6 | Uygulama klasörleri için |
+| futures | 0.3 | |
 
 ## iced 0.14 notları
 
-- Uygulama şöyle başlatılır: `iced::application(State::new, State::update, State::view)`. `new` fonksiyonu `(State, Task<Message>)` döndürür.
-- `.title(...)`, `.theme(...)`, `.window(...)` ve `.run()` builder üzerinden çağrılır.
+- **Başlatma:** `iced::application(State::new, State::update, State::view)`. `new` fonksiyonu `(State, Task<Message>)` döndürür.
+- **Builder:** `.title(...)`, `.theme(...)`, `.subscription(...)`, `.window_size(...)` ve `.run()` builder üzerinden çağrılır.
+- **Uzun süren işler:** `Subscription::run_with(data, fn(&D) -> Stream)` ile çalıştırılır. Örnek: `main.rs` içindeki `live_feed`, `iced::stream::channel` ile kuruluyor ve kendi komut kanalını `Message::FeedReady` olarak geri gönderiyor. Fonksiyon `impl Stream + use<>` döndürmeli.
+- **Stil fonksiyonları:**
+  - `button::primary`, `button::secondary`, `button::text`
+  - `text::success`, `text::danger`, `text::secondary`
+  - `rule::horizontal(1)`, `space().width(Fill)`, `iced::padding::bottom(10)`
+  - Padding için 4 elemanlı dizi kabul edilmiyor.
+- **Kaynak kodu:** iced'in kaynağı `~/.cargo/registry/src/*/iced_*-0.14*` altında. API'den şüphe edilirse oraya bakılır.
 
 ## Dikkat edilecekler
 

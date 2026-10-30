@@ -89,9 +89,13 @@ impl Translations {
         self.format(key, None)
     }
 
-    /// Like [`Translations::get`], filling in `{ $name }` placeholders from `args`.
-    pub fn get_with(&self, key: &str, args: &FluentArgs) -> String {
-        self.format(key, Some(args))
+    /// Like [`Translations::get`], filling in `{ $name }` placeholders from `(name, value)` pairs.
+    pub fn get_with(&self, key: &str, args: &[(&str, String)]) -> String {
+        let mut fluent_args = FluentArgs::new();
+        for (name, value) in args {
+            fluent_args.set(*name, value.as_str());
+        }
+        self.format(key, Some(&fluent_args))
     }
 
     fn format(&self, key: &str, args: Option<&FluentArgs>) -> String {
@@ -147,9 +151,8 @@ mod tests {
 
     #[test]
     fn placeholders_are_filled_in() {
-        let mut args = FluentArgs::new();
-        args.set("version", "1.2.3");
-        let text = Translations::new(Language::Turkish).get_with("app-version", &args);
+        let text = Translations::new(Language::Turkish)
+            .get_with("app-version", &[("version", "1.2.3".to_owned())]);
         assert_eq!(text, "Sürüm 1.2.3");
     }
 

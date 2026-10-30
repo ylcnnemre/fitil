@@ -8,3 +8,6 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+fitil-core.workspace = true
+rusqlite.workspace = true
+thiserror.workspace = true
