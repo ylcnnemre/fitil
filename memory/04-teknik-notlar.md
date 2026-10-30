@@ -9,7 +9,17 @@
 - **Kurulan araçlar** (30 Ekim 2026, winget ile):
   - Microsoft C++ derleme araçları: Visual Studio Build Tools 2022, "VCTools" iş yükü ve önerilen bileşenler. Rust'ın Windows'ta (MSVC) bağlantı yapabilmesi için gerekli.
   - Rust: `Rustlang.Rustup`, kararlı (stable) sürüm.
-- **PATH uyarısı:** Rust kurulduktan sonra açık olan terminallerde `cargo` bulunamayabilir. Bu durumda yeni bir terminal açılır ya da tam yol kullanılır: `~/.cargo/bin/cargo`.
+- **PATH uyarısı:** Rust kurulduktan sonra açık olan terminallerde `cargo` bulunamayabilir. Bu durumda yeni bir terminal açılır ya da tam yol kullanılır: `~/.cargo/bin/cargo`. Claude'un Bash aracında komutların başına `export PATH="$HOME/.cargo/bin:$PATH";` eklenmeli.
+- **Kurulu sürümler:** Rust 1.99.1, cargo-deny 0.20.2.
+- **GitHub CLI:** Git Bash'te `gh api /...` gibi başında `/` olan yolları dosya yolu sanıyor. Baştaki `/` olmadan yazılmalı, örneğin `gh api licenses/gpl-3.0`.
+
+## Arayüzü kontrol etmek
+
+Claude ekranı doğrudan göremez. Arayüzde bir değişiklikten sonra:
+
+1. Uygulama başlatılır: `Start-Process target\debug\fitil.exe`.
+2. Pencerenin görüntüsü alınır: `scripts/capture-window.ps1 -OutFile <yol>.png`. Betik sadece Fitil penceresini yakalar.
+3. PNG dosyası Read aracıyla açılıp incelenir. Görüntü dosyası depoya değil, oturumun scratchpad klasörüne yazılır.
 
 ## Sık kullanılan komutlar
 
@@ -54,5 +64,7 @@ Yeni bir dil eklemek için `locales/` altına yeni bir klasör açılır, dosya 
 ## Dikkat edilecekler
 
 - **Lisans:** GPL-3.0. Eklenen her bağımlılık uyumlu olmalı, `deny.toml` bunu otomatik kontrol eder.
+  - `cargo deny check` şu an "license was not encountered" uyarıları veriyor. Bunlar izin listesinde olup henüz kullanılmayan lisanslar için, hata değil.
+  - TLS için `rustls` ile `ring` kullanılacak. aws-lc'den kaçınılır.
 - **Gizlilik:** Depo herkese açık. Gizli bilgi commit edilmez.
 - **Kod dili:** Kod, kod içi açıklamalar ve commit mesajları İngilizce. Belgeler ve `memory/` Türkçe.

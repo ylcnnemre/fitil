@@ -42,4 +42,43 @@ Yapılan her şey tarih sırasıyla burada. En yeni kayıt en altta.
 
 - `docs/TASARIM.md` oluşturuldu ve 17 ek konuyla güncellendi.
 - `memory/` klasörü ve proje kökündeki `CLAUDE.md` oluşturuldu. `CLAUDE.md`, yeni oturumlarda `memory/01` ve `memory/02` dosyalarını otomatik yükler.
-- **Adım 1 başladı:** Microsoft C++ derleme araçları winget ile kuruluyor (Visual Studio Build Tools 2022, VCTools iş yükü).
+### Adım 1: Geliştirme ortamı ve proje iskeleti (tamamlandı)
+
+**Kurulumlar** (proje sahibinin onayıyla, winget ile):
+- Visual Studio Build Tools 2022, VCTools iş yükü.
+- Rustup ve Rust 1.99.1 (stable, MSVC).
+- `cargo install cargo-deny --locked` ile cargo-deny 0.20.2.
+
+**Proje iskeleti:**
+- Cargo workspace (edition 2024) ve 6 crate:
+  - `fitil-app`: binary adı `fitil`.
+  - `fitil-core`, `fitil-exchange`, `fitil-store`, `fitil-indicators`, `fitil-chart`: şimdilik sadece açıklama satırı var.
+- `fitil-app` içeriği:
+  - iced 0.14 ile 1280×800 boyutunda, ortalanmış, koyu temalı bir pencere.
+  - Ekranda başlık, alt başlık, durum metni, sürüm ve Türkçe/English düğmeleri var.
+  - `i18n.rs`: Fluent dosyalarını derleme anında gömüyor, sistem dilini `sys-locale` ile seçiyor, Unicode izolasyon işaretlerini kapatıyor.
+  - 4 test var. Biri, tüm dillerin aynı anahtarları tanımladığını kontrol ediyor.
+- `locales/tr/fitil.ftl`, `locales/en/fitil.ftl`.
+
+**Depo dosyaları:**
+- LICENSE: GPL-3.0, GitHub'ın resmi metni.
+- README (Türkçe ve İngilizce), CONTRIBUTING (İngilizce, başında Türkçe özet, çeviri rehberi dahil), CHANGELOG.
+- Issue şablonları (hata, özellik).
+- `assets/icon.svg`: ikon taslağı. Yeşil bir mum, üst fitilinde küçük bir alev.
+- `.gitignore`, `.gitattributes` (LF), `rust-toolchain.toml` (stable, rustfmt ve clippy), `deny.toml` (GPL uyumlu lisans listesi).
+- CI (`.github/workflows/ci.yml`):
+  - fmt ve clippy (Linux),
+  - derleme ve test (Windows, macOS, Linux),
+  - cargo-deny.
+- `scripts/capture-window.ps1`: çalışan Fitil penceresinin ekran görüntüsünü alan yardımcı betik. Claude arayüzü bununla kontrol eder.
+
+**Doğrulama:**
+- Yerelde `cargo build`, `test`, `fmt`, `clippy` ve `cargo deny check` temiz geçti.
+- Uygulama açıldı. Ekran görüntüsünde Türkçe otomatik seçilmiş, Türkçe karakterler düzgün çiziliyor.
+- Debug derlemede bellek kullanımı yaklaşık 217 MB. Başarı ölçütleri release derlemeyle ölçülmeli.
+
+**GitHub:**
+- `gh repo create ylcnnemre/fitil --public` ile depo açıldı.
+- İlk commit `3c480ef` gönderildi. İlk CI çalışması 5 işin hepsinde yeşil.
+
+**Son olarak:** Proje sahibi "bir sonraki adımda ne yapıyoruz" diye sordu. Adım 2'nin planı anlatıldı (ayrıntı `02-durum.md`'de). Başlamak için onay bekleniyor.
