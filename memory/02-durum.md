@@ -17,16 +17,27 @@
   - `fitil-app`: İndikatörler penceresi, ayar penceresi, indikatör etiketleri, Hacim düğmesi.
   - Ayrıntılar `03-gunluk.md` dosyasında.
 
-Uygulama şu an şunları gösteriyor:
-- **Üst çubuk:** borsa seçici (şimdilik sadece Binance), Spot ve Vadeli düğmeleri, arama, dil düğmeleri.
-- **Solda canlı fiyat listesi.**
-- **Sağda grafik:**
-  - Araç çubuğu: zaman dilimi, grafik tipi, Log ve %, **İndikatörler**, **Hacim** (mum altı hacim çubuklarını açar/kapatır).
+Uygulama şu an şunları gösteriyor (31 Ekim'de TradingView düzenine geçildi, karar 17):
+- **Üstte araç çubuğu:**
+  - Sembol adı. Tıklayınca sembol arama penceresi açılır. Grafikte yazmaya başlamak da açar.
+  - Sık kullanılan zaman dilimleri (1m 5m 15m 1h 4h 1d 1w) ve "Diğer" listesi.
+  - Grafik tipi, Log, %, **İndikatörler**, **Hacim** (mum altı hacim çubukları).
+  - En sağda dil düğmeleri.
+- **Grafik ekranın tamamını kaplar.** Solda sembol listesi yok. Açılışta en çok işlem gören Bitcoin paritesi (BTCUSDT) açılır.
   - Araç çubuğunun altında her indikatör için bir etiket: adına tıklayınca ayarları açılır, ●/○ gizler/gösterir, × kaldırır.
-  - Grafik: fiyatın üstünde indikatörler, altında paneller (RSI, MACD, Hacim…), otomatik geçmiş yükleme.
-- **Altta durum çubuğu:** İstek ağırlığı ve saat farkı yalnızca bunları bildiren borsalarda görünür.
+  - Fiyatın üstünde indikatörler, altında paneller (RSI, MACD, Hacim…), otomatik geçmiş yükleme.
+- **Sembol arama penceresi:**
+  - Tümü / Spot / Vadeli sekmeleri.
+  - Sonuçlar önce yakınlığa (tam ad, aynı coin, baştan eşleşme), sonra dolar hacmine göre sıralanır.
+  - Her sonuçta fiyat, günlük değişim ve borsa görünür. Ok tuşları + Enter ile seçilir, Esc kapatır.
+- **Altta durum çubuğu:**
+  - Grafiğin piyasasının bağlantısı, istek ağırlığı ve saat farkı. Ağırlık ve saat farkı yalnızca bunları bildiren borsalarda görünür.
+  - Önbellekteki mum sayısı. Üzerine gelince önbellek yolu görünür.
 
 ## Proje sahibinin denemesi beklenenler
+
+Yeni düzen için:
+- Sembol arama: sembol adına tıklama, grafikte yazmaya başlama, sekmeler, ok tuşları + Enter. (Proje sahibi test penceresinde aramayı kullanıp ETHUSDT vadeliyi açtı; çalıştığı görüldü.)
 
 Adım 4 için (Claude ekrana tıklayamadığı için bunları proje sahibi dener):
 - İndikatörler düğmesi → listeden ekleme, arama ("rsi", "bant").

@@ -289,3 +289,27 @@ Proje sahibi "Evet, başla" dedi. Oturum uzun sürdüğü için arada bir kez ö
 **Not:** Doğrulama sırasında açılan test penceresinde (önbellek kopyası, `scratchpad`) NEARUSDT'nin seçili olduğu ve imlecin grafikte durduğu görüldü. Proje sahibi muhtemelen pencereyi denedi.
 
 **Testler:** 132 test (`fitil-indicators` 30, `fitil-chart` 21, `fitil-market` 21, `fitil-app` 16, `fitil-store` 13, `fitil-core` 13, `fitil-exchange` 9, `fitil-binance` 9) ve 3 canlı test. fmt ve clippy temiz.
+
+### TradingView düzeni (31 Ekim 2026, Adım 4'ün ardından)
+
+**İstek:** Proje sahibi uygulamayı çalıştırdıktan sonra TradingView'ın ekran görüntüsünü gönderdi: "Arayüz TradingView gibi olmalı, solda coinlerin listelenmesine gerek yok, coin aratınca modal açılsın."
+
+**Yapılanlar:**
+- **Tasarım:** `docs/TASARIM.md` §4.5'e "Ana ekran" ve ayrıntılı "Sembol arama" maddeleri eklendi. İzleme listesi (Adım 6) sağda açılıp kapanan bir panel olacak. Karar 17 olarak `01-proje-ozeti.md`'ye yazıldı.
+- **`fitil-market`, `board.rs`:**
+  - `Board::search`: büyük/küçük harf ve ayraçlar yok sayılır (`eth/usdt` → ETHUSDT). Yakınlık sırası: tam ad, aynı coin (base), baştan eşleşme, içinde geçme. Aynı yakınlıkta dolar hacmi.
+  - `search_markets` birden fazla piyasayı birleştirir.
+  - `default_symbol`: en çok işlem gören BTC paritesi, yoksa en çok işlem gören sembol.
+  - Eski `ranked` kaldırıldı.
+- **`fitil-app`:**
+  - `view.rs` baştan yazıldı. Araç çubuğu: sembol adı (tıklayınca arama), sık kullanılan zaman dilimi düğmeleri ve "Diğer" listesi, grafik tipi, Log, %, İndikatörler, Hacim, dil düğmeleri. Grafik ekranın tamamında.
+  - Durum çubuğu grafiğin piyasasını gösterir. Önbellekteki mum sayısı araç çubuğundan buraya taşındı, önbellek yolu ipucunda.
+  - `dialogs.rs`: sembol arama penceresi (`Dialog::Symbols`): sekmeler, yüklenemeyen piyasa için "Tekrar dene", en fazla 100 sonuç.
+  - Klavye: `iced::event::listen_with(key_message)`. Esc her durumda pencereyi kapatır. Yukarı/aşağı oklar seçimi taşır. Hiçbir kutunun almadığı bir harf ya da rakam sembol aramasını açar.
+  - İlk piyasa yüklenince varsayılan grafik açılır (`--open` verilmişse o açılır).
+  - Kaldırılanlar: borsa seçici, Spot/Vadeli düğmeleri, üstteki arama kutusu, soldaki liste.
+- **Testler:** 137 test. Yeniler: arama sıralaması, piyasaların birleşmesi, varsayılan sembol, yazınca arama açılması, oklar ve Enter, sekmeler.
+
+**Ekranda doğrulananlar:** Test penceresi (önbellek kopyası) açıldı, BTCUSDT kendiliğinden geldi. Proje sahibi o pencerede arama penceresini açıp ETHUSDT vadeliyi seçti. Ekran görüntüleri pencerenin, sekmelerin, etiketlerin ve "2.173 sonuçtan ilk 100'ü" notunun doğru çıktığını gösterdi.
+
+**Not:** Proje sahibinin kendi penceresi (`target\debug\fitil.exe`, eski sürüm) açık kaldı, kapatılmadı. Yeni sürüm `target\verify` klasöründe derlendi.

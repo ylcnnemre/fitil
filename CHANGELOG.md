@@ -47,6 +47,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   chart in one click. They live in a separate `user.sqlite`, so clearing the candle cache
   keeps them.
 - A button that shows or hides the volume bars under the candles.
+- A symbol search window, opened from the symbol's name in the toolbar or by typing on
+  the chart: tabs per kind of market, the closest matches first and then the most
+  traded, with each symbol's price, daily change and exchange; arrow keys and Enter
+  pick a result.
+- A chart opens at start on the most traded Bitcoin pair.
 
 ### Changed
 
@@ -60,6 +65,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Candles' quote volume, trade count and taker volume are optional, since not every
   exchange reports them.
 - The candle cache keys include the exchange. Existing caches are upgraded in place.
+- The window is laid out like TradingView: the chart fills it, under a toolbar with the
+  symbol, favorite timeframes as buttons, the chart type, scales, indicators and volume.
+  The watchlist on the left is replaced by the symbol search window.
 
 ### Fixed
 

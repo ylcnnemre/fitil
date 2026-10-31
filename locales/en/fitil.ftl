@@ -9,18 +9,20 @@ language-en = English
 
 market-spot = Spot
 market-futures = Futures (USDⓈ-M)
+market-tag-spot = SPOT
+market-tag-futures = FUTURES
 
-search-placeholder = Search symbols…
+## Symbol search window
 
-watchlist-symbol = Symbol
-watchlist-price = Price
-watchlist-change = 24h change
-watchlist-loading = Loading symbols…
-watchlist-empty = No matching symbols.
-watchlist-retry = Try again
-watchlist-count = { $shown } of { $total } symbols, sorted by volume
+search-title = Symbol search
+search-placeholder = Type a symbol or a coin (e.g. BTC, ETHUSDT)…
+search-all = All
+search-empty = No matching symbols.
+search-more = Showing the first { $shown } of { $total } results. Type a little more to narrow them down.
+search-market-loading = Loading { $market } symbols…
+symbols-loading = Loading symbols…
+symbols-retry = Try again
 
-detail-empty = Pick a symbol on the left to see its chart.
 detail-source = built from { $source } candles
 detail-cached = { $count } candles cached ({ $timeframe })
 detail-complete = full history loaded
@@ -33,9 +35,13 @@ chart-kind-area = Area
 chart-kind-heikin-ashi = Heikin Ashi
 scale-log = Log
 scale-percent = %
-chart-hint = Wheel: zoom · Drag: pan · Drag the price axis: vertical scale · Drag the time axis: horizontal scale · Drag a pane's edge: pane height · Double-click: reset
+chart-hint = Type: search symbols · Wheel: zoom · Drag: pan · Drag the price axis: vertical scale · Drag the time axis: horizontal scale · Drag a pane's edge: pane height · Double-click: reset
 chart-indicators = Indicators
 chart-volume-toggle = Volume
+chart-symbol-search = Search symbol
+chart-symbol-hint = Change the symbol. You can also just start typing on the chart.
+chart-pick-symbol = Search for the symbol whose chart you want to see.
+chart-more-timeframes = More
 chart-open = O
 chart-high = H
 chart-low = L

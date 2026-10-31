@@ -1,4 +1,4 @@
-//! The watchlist's data: a market's symbols and their latest 24-hour statistics.
+//! Finding symbols: each market's symbols and their latest 24-hour statistics.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -33,6 +33,18 @@ pub struct Board {
     tickers: HashMap<String, Ticker>,
 }
 
+/// A symbol found by a search, with its latest statistics.
+#[derive(Debug, Clone, Copy)]
+pub struct Match<'a> {
+    pub symbol: &'a Symbol,
+    pub ticker: &'a Ticker,
+    /// How closely the symbol matches: 0 for its very name, 1 for its coin, 2 for a name
+    /// that starts with the search, 3 for one that only contains it.
+    closeness: u8,
+    /// The 24-hour volume in dollars.
+    dollar_volume: f64,
+}
+
 impl Board {
     pub fn new(snapshot: MarketSnapshot) -> Self {
         let mut board = Self {
@@ -60,31 +72,91 @@ impl Board {
         }
     }
 
-    /// Statistics of the symbols containing `search` (in any case), most traded first.
+    /// The symbols matching `text`, closest first and then most traded.
     ///
-    /// Pairs are quoted in many currencies (USDT, TRY, IDR, BTC…), so volumes are compared
-    /// in dollars, using the market's own prices.
-    pub fn ranked(&self, search: &str) -> Vec<&Ticker> {
-        let search = search.trim().to_uppercase();
+    /// Case, spaces and separators are ignored, so `eth/usdt` finds `ETHUSDT` (and would
+    /// find `ETH-USDT`). Pairs are quoted in many currencies (USDT, TRY, IDR, BTC…), so
+    /// volumes are compared in dollars, using the market's own prices.
+    pub fn search(&self, text: &str) -> Vec<Match<'_>> {
+        let wanted = simplified(text);
         let mut rates: HashMap<&str, f64> = HashMap::new();
-        let mut ranked: Vec<(f64, &Ticker)> = self
+        let mut matches: Vec<Match> = self
             .tickers
             .values()
-            .filter(|ticker| ticker.symbol.to_uppercase().contains(&search))
-            .map(|ticker| {
-                let quote = self
-                    .symbols
-                    .get(&ticker.symbol)
-                    .map_or("", |symbol| symbol.quote_asset.as_str());
+            .filter_map(|ticker| {
+                let symbol = self.symbols.get(&ticker.symbol)?;
+                let closeness = closeness(symbol, &wanted)?;
+                let quote = symbol.quote_asset.as_str();
                 let rate = *rates
                     .entry(quote)
                     .or_insert_with(|| usd_rate(quote, &self.tickers).unwrap_or(0.0));
-                (ticker.quote_volume * rate, ticker)
+                Some(Match {
+                    symbol,
+                    ticker,
+                    closeness,
+                    dollar_volume: ticker.quote_volume * rate,
+                })
             })
             .collect();
-        ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
-        ranked.into_iter().map(|(_, ticker)| ticker).collect()
+        sort(&mut matches);
+        matches
     }
+
+    /// The symbol a chart opens on when nothing else was asked for: the most traded
+    /// Bitcoin pair, or the most traded symbol of all.
+    pub fn default_symbol(&self) -> Option<&Symbol> {
+        let all = self.search("");
+        all.iter()
+            .find(|found| found.symbol.base_asset == "BTC")
+            .or(all.first())
+            .map(|found| found.symbol)
+    }
+}
+
+/// Searches several markets at once: their matches together, closest first and then
+/// most traded.
+pub fn search_markets<'a>(
+    boards: impl IntoIterator<Item = &'a Board>,
+    text: &str,
+) -> Vec<Match<'a>> {
+    let mut matches: Vec<Match<'a>> = boards
+        .into_iter()
+        .flat_map(|board| board.search(text))
+        .collect();
+    sort(&mut matches);
+    matches
+}
+
+fn sort(matches: &mut [Match]) {
+    matches.sort_by(|a, b| {
+        a.closeness
+            .cmp(&b.closeness)
+            .then(b.dollar_volume.total_cmp(&a.dollar_volume))
+    });
+}
+
+/// How closely `symbol` matches `wanted` (simplified), if at all.
+fn closeness(symbol: &Symbol, wanted: &str) -> Option<u8> {
+    let name = simplified(&symbol.name);
+    if wanted.is_empty() || name == wanted {
+        Some(0)
+    } else if simplified(&symbol.base_asset) == wanted {
+        Some(1)
+    } else if name.starts_with(wanted) {
+        Some(2)
+    } else if name.contains(wanted) {
+        Some(3)
+    } else {
+        None
+    }
+}
+
+/// Only the letters and digits of `text`, in upper case.
+fn simplified(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_uppercase)
+        .collect()
 }
 
 /// Dollars per unit of `asset`, from the market's own `ASSETUSDT` or `USDTASSET` price.
@@ -108,11 +180,11 @@ mod tests {
     use crate::fake::FAKE;
     use fitil_core::Market;
 
-    fn symbol(name: &str, base: &str, quote: &str) -> Symbol {
+    fn symbol(kind: MarketKind, name: &str, base: &str, quote: &str) -> Symbol {
         Symbol {
             market: Market {
                 exchange: FAKE,
-                kind: MarketKind::Spot,
+                kind,
             },
             name: name.into(),
             base_asset: base.into(),
@@ -133,12 +205,13 @@ mod tests {
     }
 
     fn board() -> Board {
+        let spot = |name, base, quote| symbol(MarketKind::Spot, name, base, quote);
         Board::new(MarketSnapshot {
             symbols: vec![
-                symbol("BTCUSDT", "BTC", "USDT"),
-                symbol("ETHBTC", "ETH", "BTC"),
-                symbol("USDTIDR", "USDT", "IDR"),
-                symbol("BTCIDR", "BTC", "IDR"),
+                spot("BTCUSDT", "BTC", "USDT"),
+                spot("ETHBTC", "ETH", "BTC"),
+                spot("USDTIDR", "USDT", "IDR"),
+                spot("BTCIDR", "BTC", "IDR"),
             ],
             tickers: vec![
                 ticker("BTCUSDT", 77_000.0, 2_000_000_000.0), // $2 billion
@@ -150,22 +223,62 @@ mod tests {
         })
     }
 
-    fn names(tickers: &[&Ticker]) -> Vec<String> {
-        tickers.iter().map(|t| t.symbol.clone()).collect()
+    fn names(matches: &[Match]) -> Vec<String> {
+        matches
+            .iter()
+            .map(|found| found.symbol.name.clone())
+            .collect()
     }
 
     #[test]
     fn volumes_are_compared_in_dollars() {
         assert_eq!(
-            names(&board().ranked("")),
+            names(&board().search("")),
             ["BTCUSDT", "ETHBTC", "USDTIDR", "BTCIDR"]
         );
     }
 
     #[test]
-    fn search_matches_any_part_in_any_case() {
-        assert_eq!(names(&board().ranked(" idr ")), ["USDTIDR", "BTCIDR"]);
-        assert!(board().ranked("XYZ").is_empty());
+    fn closer_matches_come_first() {
+        // The coin itself before pairs that only contain its name.
+        assert_eq!(
+            names(&board().search("btc")),
+            ["BTCUSDT", "BTCIDR", "ETHBTC"]
+        );
+        // The very name first, whatever the case and separators.
+        assert_eq!(names(&board().search(" Eth/BTC ")), ["ETHBTC"]);
+        assert_eq!(names(&board().search("idr")), ["USDTIDR", "BTCIDR"]);
+        assert!(board().search("XYZ").is_empty());
+    }
+
+    #[test]
+    fn markets_are_searched_together() {
+        let futures = Board::new(MarketSnapshot {
+            symbols: vec![symbol(
+                MarketKind::LinearPerpetual,
+                "BTCUSDT",
+                "BTC",
+                "USDT",
+            )],
+            tickers: vec![ticker("BTCUSDT", 77_000.0, 9_000_000_000.0)],
+        });
+        let spot = board();
+        let found = search_markets([&spot, &futures], "btc");
+        assert_eq!(names(&found), ["BTCUSDT", "BTCUSDT", "BTCIDR", "ETHBTC"]);
+        // The futures pair trades more, so it comes first among the Bitcoin pairs.
+        assert_eq!(found[0].symbol.market.kind, MarketKind::LinearPerpetual);
+        assert_eq!(found[1].symbol.market.kind, MarketKind::Spot);
+    }
+
+    #[test]
+    fn charts_open_on_the_most_traded_bitcoin_pair() {
+        assert_eq!(board().default_symbol().unwrap().name, "BTCUSDT");
+        let no_bitcoin = Board::new(MarketSnapshot {
+            symbols: vec![symbol(MarketKind::Spot, "ETHUSDT", "ETH", "USDT")],
+            tickers: vec![ticker("ETHUSDT", 2_000.0, 1.0)],
+        });
+        assert_eq!(no_bitcoin.default_symbol().unwrap().name, "ETHUSDT");
+        assert!(Board::default().default_symbol().is_none());
     }
 
     #[test]
@@ -175,9 +288,8 @@ mod tests {
             ticker("BTCUSDT", 78_000.0, 1.0),
             ticker("NEWCOIN", 1.0, 1.0),
         ]);
-        let all = board.ranked("");
-        assert_eq!(all.len(), 4);
-        assert_eq!(board.ranked("BTCUSDT")[0].last_price, 78_000.0);
+        assert_eq!(board.search("").len(), 4);
+        assert_eq!(board.search("BTCUSDT")[0].ticker.last_price, 78_000.0);
         assert!(board.symbol("NEWCOIN").is_none());
     }
 }

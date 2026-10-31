@@ -41,6 +41,7 @@ Tüm kararlar 30 Ekim 2026'da, ilk oturumda verildi.
 | 14 | Dışarıdan gelen katkıları Claude inceleyip Türkçe özetler, birleştirme kararı proje sahibinde | Proje sahibi Rust bilmediği için. Kripto projelerinde kötü niyetli katkı riski var. |
 | 15 | Mimari: "port ve adaptör" (hexagonal), çok borsalı ve modüler (31 Ekim 2026) | Proje sahibi sordu: "Mimariyi pek konuşmadık, temiz bir mimari daha iyi olur. Hyperliquid, OKX, Huobi gibi borsalar ve farklı modüller gelebilir, hepsini düşünerek hareket edelim." Kurallar `docs/TASARIM.md` §6'da. Her borsa ayrı bir adaptör crate'idir ve ortak `Exchange` arayüzünü uygular. İş mantığı `fitil-market`'te, arayüzsüz test edilir. |
 | 16 | Eklenecek borsalar: OKX, Hyperliquid, HTX (Huobi), Bybit, BtcTurk | Faz 2. Her biri §6.3'teki adımlarla eklenir. |
+| 17 | Arayüz TradingView düzeninde: solda sembol listesi yok, ekran grafiğe ayrılır, sembol bir arama penceresinden seçilir (31 Ekim 2026) | Proje sahibi TradingView'ın ekran görüntüsünü gönderip şunu dedi: "Arayüz TradingView gibi olmalı, solda coinlerin listelenmesine gerek yok, coin aratınca modal açılsın." İzleme listesi (Adım 6) sağda açılıp kapanan bir panel olacak. `docs/TASARIM.md` §4.5. |
 
 ## Fazlar (özet)
 

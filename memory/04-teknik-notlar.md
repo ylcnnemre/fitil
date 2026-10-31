@@ -89,10 +89,10 @@ Mimari "port ve adaptör" (hexagonal) düzenindedir. Kurallar ve bağımlılık 
 | `fitil-exchange` | Borsa arayüzü ve ortak araçlar | `Exchange` trait (async-trait), `CandleQuery` (Latest/From/Until), `Features`, `RequestUsage`, `ExchangeError` (Clone), feed tipleri (`Topic`, `FeedCommand`, `FeedEvent`), `stream::run_stream` ve `StreamProtocol`, `RateLimiter` (pencere süresi ayarlanır), `Clock`, `http_client()` |
 | `fitil-binance` | Binance adaptörü | `rest.rs` (piyasa başına REST istemcisi, istek ağırlığı), `stream.rs` (`BinanceStream` protokolü), `wire.rs` (JSON). Kayıtlı yanıtlar `tests/fixtures/binance/`'te. |
 | `fitil-store` | SQLite, iki dosya | `Store` = `cache.sqlite` (göç 1 ilk şema, göç 2 anahtara `exchange`, isteğe bağlı alanlar NULL, `usdm` → `perp`). `UserData` = `user.sqlite` (göç 1: `indicator_templates`). Göç kodu ortak: `migrate(conn, MIGRATIONS)`. |
-| `fitil-market` | Uygulama katmanı | `loader.rs` (`open_series`, `load_older`, `save_candle`), `series.rs` (`Series`: bellekteki mumlar, canlı mum, `LiveUpdate`), `board.rs` (`Board`: fiyat listesi, dolar hacmine göre sıralama, `load_market`), `studies.rs` (`Studies`, `StudyId`, `is_available`), `templates.rs` (`Template`, `load/save/delete_template`, `SharedUserData`), `fake.rs` (testler için sahte borsa) |
+| `fitil-market` | Uygulama katmanı | `loader.rs` (`open_series`, `load_older`, `save_candle`), `series.rs` (`Series`: bellekteki mumlar, canlı mum, `LiveUpdate`), `board.rs` (`Board`: semboller ve 24 saatlik verileri; `search`, `search_markets`, `default_symbol`, `load_market`), `studies.rs` (`Studies`, `StudyId`, `is_available`), `templates.rs` (`Template`, `load/save/delete_template`, `SharedUserData`), `fake.rs` (testler için sahte borsa) |
 | `fitil-indicators` | İndikatör hesapları | `primitives.rs` (Sma, Ema, Wma, Deviation…), `indicators/` (22 indikatör), `catalog.rs` (`Definition`, `catalog()`, `definition(id)`), `settings.rs` (`Settings`, `Params`, `Rgb`, `PALETTE`), `calculation.rs` (`Calculation`: artımlı hesap) |
 | `fitil-chart` | Grafik bileşeni | iced Canvas üzerinde, sıfırdan yazıldı. `chart.rs` (durum, panel ağırlıkları), `draw.rs` (çizim, yerleşim, fare), `scale.rs`, `study.rs` (grafiğin indikatör modeli) |
-| `fitil-app` | Pencere ve ekranlar | `main.rs` (durum, mesajlar, `exchanges()` borsa listesi, `--open`), `view.rs`, `dialogs.rs` (pencereler), `studies.rs` (indikatör → grafik modeli, etiketler), `feed.rs` (canlı veri aboneliği), `storage.rs` (`cache.sqlite` yerel, `user.sqlite` dolaşan klasörde), `error.rs`, `format.rs`, `i18n.rs` |
+| `fitil-app` | Pencere ve ekranlar | `main.rs` (durum, mesajlar, `exchanges()` borsa listesi, `--open`), `view.rs` (araç çubuğu, grafik alanı, durum çubuğu), `dialogs.rs` (sembol arama, indikatörler, ayarlar), `studies.rs` (indikatör → grafik modeli, etiketler), `feed.rs` (canlı veri aboneliği), `storage.rs` (`cache.sqlite` yerel, `user.sqlite` dolaşan klasörde), `error.rs`, `format.rs`, `i18n.rs` |
 | `locales/<dil>/fitil.ftl` | Arayüz metinleri | |
 
 **Yeni dil:** `locales/` altına yeni bir klasör açılır, dosya çevrilir ve dil kodu `fitil-app/src/i18n.rs` içindeki dil listesine eklenir.
@@ -143,7 +143,12 @@ Mimari "port ve adaptör" (hexagonal) düzenindedir. Kurallar ve bağımlılık 
 - **`iced::mouse` modülü Click yardımcısını dışarı açmıyor.** Çift tıklama `draw.rs` içinde zaman ve mesafe kontrolüyle algılanıyor.
 - **Canvas'ta yazılar şekillerin üstünde:** Aynı katmandaki bütün yazılar bütün şekillerden sonra çiziliyor. Önbellekli katmandaki bir yazı, üst katmandaki bir kutunun içinden görünür. Bu yüzden eksen yazıları her karede çizilen katmanda, kutuların altına düşenler atlanıyor.
 - **`with_clip` koordinatları kaydırmaz** (0.14): kırpılmış alanda da mutlak koordinatlarla çizilir.
-- **`Subscription::map` ve `filter_map`** sadece yakalama yapmayan (boyutu sıfır) kapanışları kabul eder. Klavye: `iced::keyboard::listen().filter_map(|event| …)`.
+- **`Subscription::map` ve `filter_map`** sadece yakalama yapmayan (boyutu sıfır) kapanışları kabul eder.
+- **Klavye:**
+  - `iced::event::listen_with(fn)` her olayı durumuyla (`Captured` ya da `Ignored`) verir. Yazı kutusu Esc'i yakalasa bile pencereyi kapatabilmek için bu kullanılıyor (`main.rs` içinde `key_message`).
+  - `keyboard::listen()` ise sadece yakalanmamış tuşları verir.
+  - Yazı kutusu yukarı ve aşağı okları yakalamaz.
+- **Kaydırma:** `operation::snap_to(id, RelativeOffset { x: None, y: Some(oran) })`. Bunun için `scrollable(…).id("kimlik")` verilmiş olmalı.
 - **Odak:** `text_input(...).id("kimlik")` ve `iced::widget::operation::focus("kimlik")` bir `Task` döndürür.
 - **Pencere (modal):** `stack![taban, opaque(mouse_area(center(opaque(içerik)).style(…)).on_press(kapat))]`.
 - **Kaydırma çubuğu:** `scrollable(…).spacing(6)` çubuğu içeriğin üstüne değil yanına koyar.

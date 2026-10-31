@@ -107,13 +107,19 @@ Alış/Satış Hacmi ve CVD için ek veri indirmek gerekmez. Binance her mumla b
 
 ### 4.5 Çalışma alanı
 
+- **Ana ekran:** TradingView'daki gibi ekranın tamamı grafiğe ayrılır, solda sabit bir sembol listesi yoktur. Grafiğin üstündeki araç çubuğunda sembol adı, zaman dilimleri, grafik tipi ve indikatörler bulunur. Uygulama açılınca boş ekran yerine en çok işlem gören Bitcoin paritesinin grafiği açılır. (Proje sahibinin isteği, 31 Ekim 2026.)
 - **Çoklu grafik düzeni:** Tek grafik, 2'li (yan yana veya üst üste), 3'lü, 2×2, 6'lı ve 8'li düzen. Bölmeler sürüklenerek boyutlandırılır.
 - **Senkronizasyon:** Grafikler arasında sembol, zaman dilimi, artı imleci ve zaman ekseni isteğe bağlı olarak eşlenebilir.
+- **Sembol arama:**
+  - Araç çubuğundaki sembol adına tıklayınca ya da grafik üzerinde yazmaya başlayınca bir arama penceresi açılır.
+  - Pencerede piyasa sekmeleri (Tümü, Spot, Vadeli) ve sonuçlar bulunur. Her sonuçta sembol, varlık çifti, piyasa etiketi, son fiyat, 24 saatlik değişim ve borsa görünür.
+  - Sonuçlar önce eşleşmenin yakınlığına (tam eşleşme, aynı coin, baştan eşleşme), sonra dolar cinsinden hacme göre sıralanır.
+  - Tıklayarak ya da ok tuşları ve Enter ile seçilir. Esc pencereyi kapatır.
 - **İzleme listesi:**
+  - TradingView'daki gibi sağda açılıp kapanan bir panel. Ana ekranda sürekli yer kaplamaz.
   - Canlı fiyat, 24 saatlik değişim yüzdesi ve hacim.
   - Birden fazla liste oluşturulabilir, sütuna göre sıralanabilir.
   - Bir sembole tıklanınca seçili grafikte açılır.
-- **Sembol arama:** Grafik üzerinde yazmaya başlayınca arama penceresi açılır.
 - **Kaldığın yerden devam:** Uygulama kapanıp açıldığında düzen, grafikler, indikatörler ve çizimler aynen geri gelir. Düzenler isim verilerek kaydedilebilir.
 - **Grafik görüntüsü:** Tek tuşla grafiğin resmi panoya kopyalanır ya da PNG olarak kaydedilir.
 - **Yedekle / geri yükle:** Çizimler, düzenler, şablonlar ve ayarlar tek bir dosyaya aktarılıp başka bir bilgisayara taşınabilir.

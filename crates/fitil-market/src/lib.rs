@@ -1,4 +1,4 @@
-//! Fitil's application layer: candle series, live updates, the watchlist and the
+//! Fitil's application layer: candle series, live updates, finding symbols and the
 //! indicators on a chart.
 //!
 //! Decisions live here, not in the user interface: what to read from the cache and what
@@ -16,7 +16,7 @@ mod templates;
 #[cfg(test)]
 mod fake;
 
-pub use board::{Board, MarketSnapshot, load_market};
+pub use board::{Board, MarketSnapshot, Match, load_market, search_markets};
 pub use loader::{Loaded, SharedStore, load_older, open_series, save_candle};
 pub use series::{LiveUpdate, Series};
 pub use studies::{Studies, Study, StudyId, is_available};

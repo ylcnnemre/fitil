@@ -24,12 +24,13 @@ use fitil_core::{Candle, ExchangeId, Market, MarketKind, SeriesKey, Symbol, Time
 use fitil_exchange::{Exchange, Features, FeedCommand, FeedEvent, Topic};
 use fitil_indicators::{Rgb, Settings, Value};
 use fitil_market::{
-    Board, LiveUpdate, Loaded, MarketError, MarketSnapshot, Series, SharedStore, SharedUserData,
-    Studies, StudyId, TEMPLATE_NAME_MAX, Template,
+    Board, LiveUpdate, Loaded, MarketError, MarketSnapshot, Match, Series, SharedStore,
+    SharedUserData, Studies, StudyId, TEMPLATE_NAME_MAX, Template,
 };
 use futures::channel::mpsc;
 use i18n::{Language, Translations};
 use iced::keyboard::{self, key::Named};
+use iced::widget::operation;
 use iced::{Element, Subscription, Task, Theme};
 
 fn main() -> iced::Result {
@@ -58,6 +59,9 @@ const TIMEFRAME_CHOICES: [&str; 21] = [
     "2d", "3d", "1w", "2w", "1M", "3M",
 ];
 
+/// Results the symbol search lists; typing more finds the rest.
+const SEARCH_RESULTS: usize = 100;
+
 struct Fitil {
     translations: Translations,
     cache: Result<SharedStore, AppError>,
@@ -65,9 +69,6 @@ struct Fitil {
     exchanges: Vec<Arc<dyn Exchange>>,
     /// Every market of every exchange, in exchange order.
     markets: BTreeMap<Market, MarketState>,
-    /// The market the watchlist shows.
-    market: Market,
-    search: String,
     selection: Option<Selection>,
     /// Chart type, price scale, volume bars and indicators, kept when another symbol or
     /// timeframe is opened.
@@ -84,6 +85,14 @@ struct Fitil {
 
 /// A window shown over the main screen.
 enum Dialog {
+    /// Finding a symbol to open.
+    Symbols {
+        search: String,
+        /// Only this kind of market, or all of them.
+        kind: Option<MarketKind>,
+        /// The result picked with the arrow keys.
+        highlight: usize,
+    },
     /// The indicators that can be added, and the templates.
     Indicators {
         search: String,
@@ -189,9 +198,6 @@ fn market_kind(name: &str) -> Option<MarketKind> {
 #[derive(Debug, Clone)]
 enum Message {
     LanguageSelected(Language),
-    ExchangeSelected(ExchangeId),
-    MarketSelected(Market),
-    SearchChanged(String),
     MarketLoaded(Market, Result<MarketSnapshot, MarketError>),
     RetryMarket(Market),
     FeedReady(Market, mpsc::UnboundedSender<FeedCommand>),
@@ -205,6 +211,15 @@ enum Message {
     OlderLoaded(SeriesKey, Result<Loaded, MarketError>),
     CandleSaved(SeriesKey, Result<(), MarketError>),
     Tick,
+    /// Opens the symbol search with some text already typed.
+    OpenSymbolSearch(String),
+    /// A letter or digit typed while nothing else took it.
+    KeyTyped(String),
+    SymbolSearchChanged(String),
+    SymbolSearchKind(Option<MarketKind>),
+    /// Moves the picked result up (negative) or down.
+    SymbolSearchMove(isize),
+    SymbolSearchSubmit,
     VolumeToggled,
     OpenIndicators,
     CloseDialog,
@@ -269,7 +284,6 @@ impl Fitil {
                 (market, state)
             })
             .collect();
-        let market = *markets.keys().next().expect("every exchange has a market");
         let user_data = storage::open_user_data();
         let app = Self {
             translations: Translations::new(Language::from_system()),
@@ -278,8 +292,6 @@ impl Fitil {
             user_data,
             exchanges,
             markets,
-            market,
-            search: String::new(),
             selection: None,
             chart_kind: ChartKind::default(),
             price_scale: PriceScale::default(),
@@ -334,14 +346,8 @@ impl Fitil {
                 Subscription::run_with(source, feed::run)
             });
         let clock = iced::time::every(Duration::from_secs(1)).map(|_| Message::Tick);
-        let escape = keyboard::listen().filter_map(|event| match event {
-            keyboard::Event::KeyPressed {
-                key: keyboard::Key::Named(Named::Escape),
-                ..
-            } => Some(Message::CloseDialog),
-            _ => None,
-        });
-        Subscription::batch(feeds.chain([clock, escape]))
+        let keys = iced::event::listen_with(key_message);
+        Subscription::batch(feeds.chain([clock, keys]))
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -361,13 +367,6 @@ impl Fitil {
                 // Indicator labels are translated too.
                 self.refresh_chart();
             }
-            Message::ExchangeSelected(exchange) => {
-                if let Some(&market) = self.markets.keys().find(|m| m.exchange == exchange) {
-                    self.market = market;
-                }
-            }
-            Message::MarketSelected(market) => self.market = market,
-            Message::SearchChanged(search) => self.search = search,
             Message::MarketLoaded(market, result) => {
                 let state = self.market_mut(market);
                 match result {
@@ -375,9 +374,9 @@ impl Fitil {
                         state.board = Board::new(snapshot);
                         state.load = Load::Ready;
                         if let Some(request) = self.pending_open.take_if(|r| r.matches(market)) {
-                            self.market = market;
                             return self.select(market, &request.symbol, request.timeframe);
                         }
+                        return self.open_default_chart(market);
                     }
                     Err(error) => state.load = Load::Failed(error.into()),
                 }
@@ -397,6 +396,9 @@ impl Fitil {
             }
             Message::Feed(market, event) => return self.on_feed(market, event),
             Message::SymbolSelected(market, name) => {
+                if matches!(self.dialog, Some(Dialog::Symbols { .. })) {
+                    self.dialog = None;
+                }
                 let timeframe = self.selection.as_ref().map_or_else(
                     || DEFAULT_TIMEFRAME.parse().expect("valid default"),
                     |selection| selection.series.target(),
@@ -467,6 +469,65 @@ impl Fitil {
                     }
                 }
             }
+            Message::OpenSymbolSearch(text) => return self.open_symbol_search(text),
+            Message::KeyTyped(text) => {
+                // Typing on the chart starts a search, as in TradingView.
+                if self.dialog.is_none() {
+                    return self.open_symbol_search(text);
+                }
+            }
+            Message::SymbolSearchChanged(text) => {
+                if let Some(Dialog::Symbols {
+                    search, highlight, ..
+                }) = &mut self.dialog
+                {
+                    *search = text;
+                    *highlight = 0;
+                }
+                return operation::snap_to(dialogs::SYMBOL_RESULTS_ID, top());
+            }
+            Message::SymbolSearchKind(chosen) => {
+                if let Some(Dialog::Symbols {
+                    kind, highlight, ..
+                }) = &mut self.dialog
+                {
+                    *kind = chosen;
+                    *highlight = 0;
+                }
+                // Typing can go on after a click on a tab.
+                return Task::batch([
+                    operation::snap_to(dialogs::SYMBOL_RESULTS_ID, top()),
+                    operation::focus(dialogs::SYMBOL_SEARCH_ID),
+                ]);
+            }
+            Message::SymbolSearchMove(step) => {
+                let Some((search, kind, _)) = self.symbol_search() else {
+                    return Task::none();
+                };
+                let count = self.symbol_results(&search, kind).len().min(SEARCH_RESULTS);
+                if let Some(Dialog::Symbols { highlight, .. }) = &mut self.dialog {
+                    *highlight = highlight
+                        .saturating_add_signed(step)
+                        .min(count.saturating_sub(1));
+                    // Keeps the picked result in view, about where it is in the list.
+                    let share = *highlight as f32 / count.saturating_sub(1).max(1) as f32;
+                    let offset = operation::RelativeOffset {
+                        x: None,
+                        y: Some(share),
+                    };
+                    return operation::snap_to(dialogs::SYMBOL_RESULTS_ID, offset);
+                }
+            }
+            Message::SymbolSearchSubmit => {
+                let picked = self.symbol_search().and_then(|(search, kind, highlight)| {
+                    self.symbol_results(&search, kind)
+                        .get(highlight)
+                        .map(|found| (found.symbol.market, found.symbol.name.clone()))
+                });
+                if let Some((market, name)) = picked {
+                    return self.update(Message::SymbolSelected(market, name));
+                }
+            }
             Message::VolumeToggled => {
                 self.show_volume = !self.show_volume;
                 if let Some(selection) = &mut self.selection {
@@ -479,7 +540,7 @@ impl Fitil {
                     template_name: String::new(),
                     confirm_delete: None,
                 });
-                return iced::widget::operation::focus(dialogs::SEARCH_ID);
+                return operation::focus(dialogs::INDICATOR_SEARCH_ID);
             }
             Message::CloseDialog => self.dialog = None,
             Message::IndicatorSearchChanged(text) => {
@@ -662,13 +723,75 @@ impl Fitil {
             .set_loading_older(selection.series.loading_older());
     }
 
-    /// What the chart's exchange provides (the watchlist's, while no chart is open).
+    /// What the chart's exchange provides.
     fn features(&self) -> Features {
-        let market = self
-            .selection
-            .as_ref()
-            .map_or(self.market, |selection| selection.symbol.market);
-        self.exchange(market.exchange).features()
+        self.exchange(self.chart_market().exchange).features()
+    }
+
+    /// The market of the chart, or the first market while no chart is open.
+    fn chart_market(&self) -> Market {
+        self.selection.as_ref().map_or_else(
+            || {
+                *self
+                    .markets
+                    .keys()
+                    .next()
+                    .expect("every exchange has a market")
+            },
+            |selection| selection.symbol.market,
+        )
+    }
+
+    /// Opens a chart once the first market has loaded, so the window does not start
+    /// empty, unless one is open or asked for already.
+    fn open_default_chart(&mut self, market: Market) -> Task<Message> {
+        let first = self.markets.keys().next() == Some(&market);
+        if !first || self.selection.is_some() || self.pending_open.is_some() {
+            return Task::none();
+        }
+        let Some(name) = self.markets[&market]
+            .board
+            .default_symbol()
+            .map(|symbol| symbol.name.clone())
+        else {
+            return Task::none();
+        };
+        let timeframe = DEFAULT_TIMEFRAME.parse().expect("valid default");
+        self.select(market, &name, timeframe)
+    }
+
+    fn open_symbol_search(&mut self, search: String) -> Task<Message> {
+        self.dialog = Some(Dialog::Symbols {
+            search,
+            kind: None,
+            highlight: 0,
+        });
+        operation::focus(dialogs::SYMBOL_SEARCH_ID)
+    }
+
+    /// What the symbol search holds: the text, the kind of market and the picked result.
+    fn symbol_search(&self) -> Option<(String, Option<MarketKind>, usize)> {
+        match &self.dialog {
+            Some(Dialog::Symbols {
+                search,
+                kind,
+                highlight,
+            }) => Some((search.clone(), *kind, *highlight)),
+            _ => None,
+        }
+    }
+
+    /// The symbols matching `search` in the loaded markets of `kind` (all when `None`),
+    /// closest first and then most traded.
+    fn symbol_results(&self, search: &str, kind: Option<MarketKind>) -> Vec<Match<'_>> {
+        let boards = self
+            .markets
+            .iter()
+            .filter(|(market, state)| {
+                kind.is_none_or(|kind| market.kind == kind) && matches!(state.load, Load::Ready)
+            })
+            .map(|(_, state)| &state.board);
+        fitil_market::search_markets(boards, search)
     }
 
     fn on_feed(&mut self, market: Market, event: FeedEvent) -> Task<Message> {
@@ -888,6 +1011,44 @@ impl Fitil {
     }
 }
 
+/// Keys that act anywhere in the window: Esc closes a dialog, the arrows move through
+/// search results, and a letter or digit typed outside any text box starts a symbol
+/// search.
+fn key_message(
+    event: iced::Event,
+    status: iced::event::Status,
+    _window: iced::window::Id,
+) -> Option<Message> {
+    let iced::Event::Keyboard(keyboard::Event::KeyPressed {
+        key,
+        text,
+        modifiers,
+        ..
+    }) = event
+    else {
+        return None;
+    };
+    match key {
+        keyboard::Key::Named(Named::Escape) => Some(Message::CloseDialog),
+        keyboard::Key::Named(Named::ArrowUp) => Some(Message::SymbolSearchMove(-1)),
+        keyboard::Key::Named(Named::ArrowDown) => Some(Message::SymbolSearchMove(1)),
+        _ if status == iced::event::Status::Captured || modifiers.command() || modifiers.alt() => {
+            None
+        }
+        _ => text
+            .filter(|text| text.chars().all(char::is_alphanumeric))
+            .map(|text| Message::KeyTyped(text.to_string())),
+    }
+}
+
+/// The top of a list.
+fn top() -> operation::RelativeOffset<Option<f32>> {
+    operation::RelativeOffset {
+        x: None,
+        y: Some(0.0),
+    }
+}
+
 fn find_exchange(exchanges: &[Arc<dyn Exchange>], id: ExchangeId) -> Arc<dyn Exchange> {
     exchanges
         .iter()
@@ -950,25 +1111,47 @@ mod tests {
 
     /// The app with one Binance spot symbol, its candle cache and user data in memory:
     /// no files and no network.
+    /// Three spot pairs: BTCUSDT, then ETHUSDT and ETHBTC, the first trading the most.
+    fn snapshot(market: Market) -> MarketSnapshot {
+        let pairs = [
+            ("BTCUSDT", "BTC", "USDT", 77_000.0, 2e9),
+            ("ETHUSDT", "ETH", "USDT", 2_200.0, 1e9),
+            ("ETHBTC", "ETH", "BTC", 0.03, 1_000.0), // 1,000 BTC: $77 million
+        ];
+        MarketSnapshot {
+            symbols: pairs
+                .iter()
+                .map(|&(name, base, quote, _, _)| Symbol {
+                    market,
+                    name: name.into(),
+                    base_asset: base.into(),
+                    quote_asset: quote.into(),
+                    price_decimals: 2,
+                })
+                .collect(),
+            tickers: pairs
+                .iter()
+                .map(|&(name, _, _, price, volume)| fitil_core::Ticker {
+                    symbol: name.into(),
+                    last_price: price,
+                    open_price: price,
+                    high_price: price,
+                    low_price: price,
+                    quote_volume: volume,
+                })
+                .collect(),
+        }
+    }
+
     fn app() -> (Fitil, Market) {
         let exchanges = exchanges();
         let market = Market {
             exchange: exchanges[0].id(),
             kind: MarketKind::Spot,
         };
-        let symbol = Symbol {
-            market,
-            name: "BTCUSDT".into(),
-            base_asset: "BTC".into(),
-            quote_asset: "USDT".into(),
-            price_decimals: 2,
-        };
         let state = MarketState {
             load: Load::Ready,
-            board: Board::new(MarketSnapshot {
-                symbols: vec![symbol],
-                tickers: Vec::new(),
-            }),
+            board: Board::new(snapshot(market)),
             feed: None,
             connection: Connection::Connected,
         };
@@ -978,8 +1161,6 @@ mod tests {
             user_data: Ok(Arc::new(Mutex::new(UserData::open_in_memory().unwrap()))),
             exchanges,
             markets: BTreeMap::from([(market, state)]),
-            market,
-            search: String::new(),
             selection: None,
             chart_kind: ChartKind::default(),
             price_scale: PriceScale::default(),
@@ -1112,8 +1293,89 @@ mod tests {
             let _ = app.update(Message::OpenStudySettings(study));
             let _ = app.view();
         }
+        let _ = app.update(Message::OpenSymbolSearch(String::new()));
+        let _ = app.view();
+        let _ = app.update(Message::SymbolSearchChanged("nothing like this".into()));
+        let _ = app.view();
         let _ = app.update(Message::CloseDialog);
         assert!(app.dialog.is_none());
+    }
+
+    #[test]
+    fn the_first_market_opens_a_bitcoin_chart() {
+        let (mut plain, market) = app();
+        assert!(plain.selection.is_none());
+        let _ = plain.update(Message::MarketLoaded(market, Ok(snapshot(market))));
+        assert_eq!(plain.selection.as_ref().unwrap().symbol.name, "BTCUSDT");
+
+        // A chart asked for on the command line wins.
+        let (mut asked, market) = app();
+        asked.pending_open = OpenRequest::from_args(
+            ["fitil", "--open", "spot:ETHBTC:4h"]
+                .map(String::from)
+                .into_iter(),
+        );
+        let _ = asked.update(Message::MarketLoaded(market, Ok(snapshot(market))));
+        let selection = asked.selection.as_ref().unwrap();
+        assert_eq!(selection.symbol.name, "ETHBTC");
+        assert_eq!(selection.series.target().to_string(), "4h");
+    }
+
+    #[test]
+    fn typing_on_the_chart_searches_symbols() {
+        let (mut app, market) = app();
+        open_chart(&mut app, market, 10);
+        let _ = app.update(Message::KeyTyped("e".into()));
+        assert!(matches!(&app.dialog, Some(Dialog::Symbols { search, .. }) if search == "e"));
+
+        let _ = app.update(Message::SymbolSearchChanged("eth".into()));
+        let (search, kind, _) = app.symbol_search().unwrap();
+        let found: Vec<&str> = app
+            .symbol_results(&search, kind)
+            .iter()
+            .map(|found| found.symbol.name.as_str())
+            .collect();
+        // Both Ether pairs, the more traded first.
+        assert_eq!(found, ["ETHUSDT", "ETHBTC"]);
+
+        // The arrows stop at the last result.
+        let _ = app.update(Message::SymbolSearchMove(1));
+        let _ = app.update(Message::SymbolSearchMove(5));
+        assert!(matches!(
+            app.dialog,
+            Some(Dialog::Symbols { highlight: 1, .. })
+        ));
+        let _ = app.update(Message::SymbolSearchMove(-3));
+        assert!(matches!(
+            app.dialog,
+            Some(Dialog::Symbols { highlight: 0, .. })
+        ));
+        let _ = app.update(Message::SymbolSearchMove(1));
+        let _ = app.update(Message::SymbolSearchSubmit);
+        assert!(app.dialog.is_none());
+        let selection = app.selection.as_ref().unwrap();
+        assert_eq!(selection.symbol.name, "ETHBTC");
+        // The timeframe stays.
+        assert_eq!(selection.series.target().to_string(), DEFAULT_TIMEFRAME);
+
+        // Typing in another window types there and starts no search.
+        let _ = app.update(Message::OpenIndicators);
+        let _ = app.update(Message::KeyTyped("x".into()));
+        assert!(matches!(app.dialog, Some(Dialog::Indicators { .. })));
+    }
+
+    #[test]
+    fn tabs_narrow_the_search_to_a_kind_of_market() {
+        let (mut app, _) = app();
+        let _ = app.update(Message::OpenSymbolSearch("btc".into()));
+        let _ = app.update(Message::SymbolSearchKind(Some(MarketKind::LinearPerpetual)));
+        let (search, kind, _) = app.symbol_search().unwrap();
+        assert_eq!(kind, Some(MarketKind::LinearPerpetual));
+        // This app has only a spot market.
+        assert!(app.symbol_results(&search, kind).is_empty());
+        let _ = app.update(Message::SymbolSearchKind(None));
+        let (search, kind, _) = app.symbol_search().unwrap();
+        assert_eq!(app.symbol_results(&search, kind).len(), 2);
     }
 
     fn parse(args: &[&str]) -> Option<OpenRequest> {

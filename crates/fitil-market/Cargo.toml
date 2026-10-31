@@ -1,6 +1,6 @@
 [package]
 name = "fitil-market"
-description = "Fitil's application layer: candle series, live updates, the watchlist and the indicators on a chart."
+description = "Fitil's application layer: candle series, live updates, finding symbols and the indicators on a chart."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

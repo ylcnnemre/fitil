@@ -9,18 +9,20 @@ language-en = English
 
 market-spot = Spot
 market-futures = Vadeli (USDⓈ-M)
+market-tag-spot = SPOT
+market-tag-futures = VADELİ
 
-search-placeholder = Sembol ara…
+## Sembol arama penceresi
 
-watchlist-symbol = Sembol
-watchlist-price = Fiyat
-watchlist-change = 24s değişim
-watchlist-loading = Semboller yükleniyor…
-watchlist-empty = Eşleşen sembol yok.
-watchlist-retry = Tekrar dene
-watchlist-count = { $total } sembolden { $shown } tanesi, hacme göre sıralı
+search-title = Sembol ara
+search-placeholder = Sembol ya da coin adı yaz (ör. BTC, ETHUSDT)…
+search-all = Tümü
+search-empty = Eşleşen sembol yok.
+search-more = { $total } sonuçtan ilk { $shown } tanesi gösteriliyor. Biraz daha yazarak aramayı daraltabilirsin.
+search-market-loading = { $market } sembolleri yükleniyor…
+symbols-loading = Semboller yükleniyor…
+symbols-retry = Tekrar dene
 
-detail-empty = Grafiğini görmek için soldan bir sembol seç.
 detail-source = { $source } mumlardan üretiliyor
 detail-cached = Önbellekte { $count } mum ({ $timeframe })
 detail-complete = tüm geçmiş yüklendi
@@ -33,9 +35,13 @@ chart-kind-area = Alan
 chart-kind-heikin-ashi = Heikin Ashi
 scale-log = Log
 scale-percent = %
-chart-hint = Tekerlek: yakınlaştır · Sürükle: kaydır · Fiyat eksenini sürükle: dikey ölçek · Zaman eksenini sürükle: yatay ölçek · Panel kenarını sürükle: panel yüksekliği · Çift tıkla: sıfırla
+chart-hint = Yaz: sembol ara · Tekerlek: yakınlaştır · Sürükle: kaydır · Fiyat eksenini sürükle: dikey ölçek · Zaman eksenini sürükle: yatay ölçek · Panel kenarını sürükle: panel yüksekliği · Çift tıkla: sıfırla
 chart-indicators = İndikatörler
 chart-volume-toggle = Hacim
+chart-symbol-search = Sembol ara
+chart-symbol-hint = Sembolü değiştir. Grafiğin üzerinde yazmaya başlaman da yeter.
+chart-pick-symbol = Grafiğini görmek istediğin sembolü ara.
+chart-more-timeframes = Diğer
 chart-open = A
 chart-high = Y
 chart-low = D
