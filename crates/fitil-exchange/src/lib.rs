@@ -39,7 +39,10 @@ pub trait Exchange: Send + Sync + 'static {
     fn markets(&self) -> &'static [MarketKind];
 
     /// Timeframes the exchange serves directly for `market`. Other timeframes are built
-    /// from these, so they must be aligned to UTC.
+    /// from these, so only list ones aligned the way Fitil aligns them: days start at
+    /// 00:00 UTC, weeks on Monday, months on the 1st. Leave out the rest (HTX's UTC+8
+    /// days, Hyperliquid's Thursday weeks and 30-day "months"); Fitil builds those from
+    /// shorter candles. Where an exchange offers a UTC variant (OKX's `1Dutc`), use it.
     fn timeframes(&self, market: MarketKind) -> &'static [Timeframe];
 
     /// The most candles one request can return.

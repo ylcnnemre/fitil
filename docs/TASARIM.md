@@ -237,7 +237,10 @@ Proje, her biri tek bir işi yapan parçalara (crate) bölünür. Hedef üç şe
   - Açılış, en yüksek, en düşük, kapanış ve hacim (baz varlık cinsinden) her borsada vardır.
   - Kote hacmi, işlem sayısı ve taker alış hacmi her borsada yoktur. Bu alanlar "bilinmiyor" olabilir.
   - Vadeli hacimlerini kontrat sayısından baz varlığa çevirmek adaptörün işidir.
-- **Saat dilimi:** Mumlar UTC'ye hizalıdır. Günlük mumları başka bir saat dilimine hizalayan borsalarda (örneğin OKX'in varsayılanı UTC+8) adaptör UTC sürümünü ister.
+- **Hizalama:** Fitil'de mumlar UTC'ye hizalıdır. Günler 00:00 UTC'de, haftalar pazartesi, aylar ayın 1'inde başlar.
+  - Bir adaptör, borsanın doğrudan verdiği zaman dilimlerinden sadece bu hizalamaya uyanları bildirir.
+  - Uymayanları Fitil daha kısa mumlardan kendisi üretir. Örnekler: HTX'in UTC+8'e hizalı günlük mumları, Hyperliquid'in perşembe başlayan haftaları ve 30 günlük "ayları".
+  - UTC sürümünü ayrıca sunan borsalarda adaptör o sürümü ister. Örneğin OKX'te `1D` yerine `1Dutc` kullanılır.
 
 ### 6.2 Borsa arayüzü (`Exchange`)
 
@@ -259,6 +262,23 @@ Her adaptör şunları sağlar:
 **Ortak WebSocket motoru** (`fitil-exchange`):
 - **Herkes için ortak:** bağlanma, koptuğunda artan aralıklarla yeniden bağlanma, sessizliği algılama, abonelikleri yeniden kurma.
 - **Adaptörün tanımladığı:** sadece kendi "protokolü". Adres, abone olma mesajı, gelen mesajların çözümü, ping kuralları ve sıkıştırma.
+
+**Borsalar arasındaki farklar.** Ekim 2026'da OKX, Hyperliquid, HTX ve Bybit'in API'leri incelendi. Bulunan farklar ve arayüzde nasıl karşılandıkları:
+
+| Fark | Örnek | Nasıl karşılanır |
+|---|---|---|
+| Tek istekte mum sayısı | Binance 1000, OKX 300, HTX 2000, Hyperliquid 5000 | Adaptör `max_candles` ile bildirir. |
+| Geçmiş derinliği | • Hyperliquid sadece son 5000 mumu verir.<br>• HTX spot REST'te sadece son 2000 mum var; daha eskisi yalnızca WebSocket isteğiyle alınır. | Eski sayfa boş gelince Fitil "borsanın verdiği geçmişin başına ulaşıldı" sayar. Adaptör `full_history` yeteneğini false bildirir. |
+| Mum alanları | Taker alış hacmi şimdilik sadece Binance'te var. İşlem sayısı OKX ve Bybit'te yok. | Bu alanlar isteğe bağlıdır. CVD gibi özellikler o borsada gizlenir. |
+| Hacim birimi | OKX ve HTX vadelide hacim kontrat sayısıyla verilir. | Adaptör hacmi baz varlığa çevirir. |
+| Tüm piyasa fiyatları | Binance'te tek bir WebSocket kanalı var. OKX ve Bybit'te sadece sembol başına kanal var ve abonelik sayısı sınırlı. | Adaptör fiyatları birkaç saniyede bir REST ile çeker. |
+| Bağlantı adresleri | OKX'te fiyatlar ve mumlar farklı WebSocket adreslerinden gelir. | Adaptör birden fazla akışı birlikte çalıştırır. |
+| Sıkıştırma | HTX'te her mesaj gzip ile sıkıştırılmıştır. | Adaptörün protokolü mesajı açar. |
+| Ping | • OKX: istemci "ping" metni gönderir.<br>• Hyperliquid: istemci JSON ping gönderir.<br>• HTX: sunucunun ping'ine yanıt verilir. | Ortak motordaki düzenli mesaj (`keepalive`) ve yanıt (`reply`) ile karşılanır. |
+| İstek limiti bilgisi | Kullanılan miktarı yanıt başlığında sadece Binance bildiriyor. | Diğer borsalarda yerel sayaç tutulur (`RateLimiter::spend`). |
+| 24 saat istatistiği | • HTX'in "açılış" fiyatı UTC+8 gününe göre.<br>• Hyperliquid'de son işlem fiyatı yok.<br>• OKX vadelide kote hacmi yok. | Adaptör en yakın karşılığı kullanır, gerekirse hesaplar (hacim × fiyat). |
+| Fiyat hassasiyeti | Hyperliquid'de sabit fiyat adımı yok, fiyatlar 5 anlamlı basamaklı. | Adaptör gösterim için ondalık sayısını hesaplar. |
+| Bölge | • Bybit ABD ve Çin'e kapalı; Türkiye için ayrı adresi var (`bybit.tr`).<br>• OKX'in ABD ve AB hesapları için ayrı adresleri var. | Adresler adaptörde ayarlanabilir. Bölge engeli (403/451) kendi hata türüne çevrilir. |
 
 ### 6.3 Yeni bir borsa eklemek
 

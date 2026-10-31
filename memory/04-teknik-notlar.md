@@ -152,3 +152,63 @@ Mimari "port ve adaptör" (hexagonal) düzenindedir. Kurallar ve bağımlılık 
   - TLS için `rustls` ile `ring` kullanılacak. aws-lc'den kaçınılır.
 - **Gizlilik:** Depo herkese açık. Gizli bilgi commit edilmez.
 - **Kod dili:** Kod, kod içi açıklamalar ve commit mesajları İngilizce. Belgeler ve `memory/` Türkçe.
+
+## Diğer borsalar (araştırma, 31 Ekim 2026)
+
+Resmi belgelerden ve Türkiye IP'sinden yapılan canlı denemelerden derlendi. Adaptör yazarken bu notlarla başla, ama güncel belgeye mutlaka tekrar bak. Arayüze etkileri `docs/TASARIM.md` §6.2'deki "Borsalar arasındaki farklar" tablosunda.
+
+**OKX** (https://www.okx.com/docs-v5/en/)
+- **Semboller:** Spot `BTC-USDT`, doğrusal perpetual `BTC-USDT-SWAP` / `BTC-USDC-SWAP`.
+- **Sembol listesi:** `GET /api/v5/public/instruments?instType=`. Fiyat hassasiyeti `tickSz`'den, kontrat büyüklüğü `ctVal`'den alınır.
+- **Mumlar:**
+  - `/market/candles` sadece son 1440 mumu verir, eskisi `/market/history-candles` ile alınır.
+  - İstek başına en fazla 300 mum. Sonuçlar yeniden eskiye sıralı. `after=ts` daha eskileri, `before=ts` daha yenileri getirir.
+  - Zaman dilimleri: `1m 3m 5m 15m 30m 1H 2H 4H`, UTC için `6Hutc 12Hutc 1Dutc 1Wutc 1Mutc`. Bunların `utc`siz hâlleri UTC+8'e hizalı.
+  - Satır: `[ts,o,h,l,c,vol,volCcy,volCcyQuote,confirm]`. Taker hacmi ve işlem sayısı yok.
+- **24 saat istatistiği:** `GET /market/tickers?instType=` (`last`, `open24h`, `volCcy24h`).
+- **WebSocket:**
+  - Fiyatlar `wss://ws.okx.com/ws/v5/public`, mumlar `wss://ws.okx.com/ws/v5/business` adresinde.
+  - Tüm piyasa için tek bir fiyat kanalı yok. İstemci 30 saniyeden kısa aralıklarla `ping` metni gönderir.
+- **Limitler:** Mumlar 40 istek / 2 sn, geçmiş mumlar 20 istek / 2 sn. Kullanım başlıkta bildirilmiyor.
+- **Saat:** `GET /api/v5/public/time`.
+
+**Hyperliquid** (https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api)
+- **İstekler:** Hepsi `POST https://api.hyperliquid.xyz/info` adresine `{"type": …}` gövdesiyle gider.
+- **Semboller:** Perpetual'lar coin adıyla (`BTC`), spot `PURR/USDC` ya da `@107` biçiminde.
+- **Fiyat hassasiyeti:** Sabit fiyat adımı yok. 5 anlamlı basamak; en fazla `6-szDecimals` ondalık (spotta `8-szDecimals`).
+- **Mumlar:**
+  - İstek: `candleSnapshot {coin, interval, startTime, endTime}`.
+  - Sadece son 5000 mum var. Eskiden yeniye sıralı. Alanlar `o h l c v n` (`n` = işlem sayısı). Taker hacmi ve kote hacmi yok.
+  - Hizalama: `1w` perşembe başlıyor, `1M` 30 günlük. Bu ikisi Fitil'e doğrudan zaman dilimi olarak bildirilmemeli.
+- **24 saat istatistiği:** `metaAndAssetCtxs` (`prevDayPx`, `dayNtlVlm`, `midPx`). Son işlem fiyatı yok.
+- **WebSocket:**
+  - Adres `wss://api.hyperliquid.xyz/ws`. Mum aboneliği: `{"method":"subscribe","subscription":{"type":"candle",…}}`.
+  - Tüm piyasa kanalları: `allMids` ve `allDexsAssetCtxs`.
+  - İstemci `{"method":"ping"}` gönderir. Sunucu 60 saniye sessiz kalırsa bağlantıyı kapatır.
+- **Limitler:** IP başına dakikada 1200 ağırlık. Mum isteği 20 ağırlık, dönen mum sayısıyla artıyor.
+
+**HTX / Huobi** (https://www.htx.com/en-us/opend/newApiPages/; eski huobiapi.github.io belgeleri güncel değil)
+- **Semboller ve adresler:**
+  - Spot `btcusdt` (`api.huobi.pro`).
+  - USDT teminatlı perpetual `BTC-USDT` (`api.hbdm.com`).
+- **Mumlar:**
+  - Spot REST'te sadece son 2000 mum var, zaman parametresi yok. Daha eskisi WebSocket `req` isteğiyle alınır (`from`/`to`, istek başına 900 mum).
+  - Günlük ve daha uzun mumlar UTC+8'e hizalı ve UTC seçeneği yok. Bu yüzden Fitil'e en fazla 4 saatlik zaman dilimleri bildirilmeli.
+- **WebSocket:**
+  - Her mesaj gzip ile sıkıştırılmış.
+  - Sunucu 5 saniyede bir `{"ping":ms}` gönderir, istemci `{"pong":ms}` ile yanıt verir.
+- **24 saat istatistiği:** Spot `/market/tickers` toplu veri verir ama açılış fiyatı UTC+8 gününe göre.
+- **Diğer:** "Çin dışı IP" şartı var.
+
+**Bybit v5** (https://bybit-exchange.github.io/docs/v5/)
+- **Mumlar:**
+  - `GET /v5/market/kline`: istek başına en fazla 1000, yeniden eskiye sıralı, `start`/`end` ms cinsinden.
+  - Zaman dilimleri `1 3 5 15 30 60 120 240 360 720 D W M`, UTC'ye hizalı.
+  - Satır `[start,o,h,l,c,volume,turnover]`.
+- **24 saat istatistiği:** `GET /v5/market/tickers?category=` tüm semboller için tek istekte (`lastPrice`, `prevPrice24h`, `turnover24h`).
+- **WebSocket:**
+  - Adres `wss://stream.bybit.com/v5/public/{spot|linear}`.
+  - Tüm piyasa için tek bir fiyat kanalı yok.
+  - 26 Kasım 2026'dan itibaren bağlantı başına en fazla 100 abonelik.
+  - İstemci 20 saniyede bir `{"op":"ping"}` gönderir.
+- **Bölge:** ABD ve Çin IP'leri 403 alır. Türkiye için ayrı adresler var: `api.bybit.tr`, `stream.bybit.tr`.
