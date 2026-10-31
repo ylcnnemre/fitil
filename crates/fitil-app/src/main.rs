@@ -15,7 +15,8 @@ use std::time::Duration;
 
 use data::{Loaded, MarketSnapshot, SharedStore};
 use error::AppError;
-use fitil_core::{Candle, Market, SeriesKey, Symbol, Ticker, Timeframe};
+use fitil_chart::{Chart, ChartKind, ChartLabels, ChartMessage, PriceScale};
+use fitil_core::{Candle, Market, SeriesKey, Symbol, Ticker, Timeframe, aggregate_whole};
 use fitil_exchange::binance::{self, BinanceClient, FeedCommand, FeedEvent, Topic};
 use futures::channel::mpsc;
 use futures::{SinkExt, Stream, StreamExt};
@@ -50,6 +51,42 @@ struct Fitil {
     market: Market,
     search: String,
     selection: Option<Selection>,
+    /// Chart type and price scale, kept when another symbol is opened.
+    chart_kind: ChartKind,
+    price_scale: PriceScale,
+    /// A chart to open once its market has loaded, from `--open` on the command line.
+    pending_open: Option<OpenRequest>,
+}
+
+/// A chart named on the command line: `--open spot:BTCUSDT:1h` or `--open futures:ETHUSDT:4h`.
+#[derive(Debug, Clone, PartialEq)]
+struct OpenRequest {
+    market: Market,
+    symbol: String,
+    timeframe: Timeframe,
+}
+
+impl OpenRequest {
+    fn from_args(mut args: impl Iterator<Item = String>) -> Option<Self> {
+        args.find(|arg| arg == "--open")?;
+        let value = args.next()?;
+        let mut parts = value.split(':');
+        let market = match parts.next()? {
+            "spot" => Market::Spot,
+            "futures" => Market::UsdMFutures,
+            _ => return None,
+        };
+        let symbol = parts.next()?.to_uppercase();
+        let timeframe = match parts.next() {
+            Some(timeframe) => timeframe.parse().ok()?,
+            None => DEFAULT_TIMEFRAME.parse().ok()?,
+        };
+        Some(Self {
+            market,
+            symbol,
+            timeframe,
+        })
+    }
 }
 
 struct MarketState {
@@ -74,18 +111,26 @@ enum Connection {
     Reconnecting { attempt: u32, delay: Duration },
 }
 
-/// The symbol whose details are shown.
+/// The symbol on the chart.
 struct Selection {
     symbol: Symbol,
     /// The timeframe the user picked.
     timeframe: Timeframe,
     /// The timeframe downloaded from Binance to build `timeframe`.
     source: Timeframe,
+    /// Loading the newest candles: on open, after a reconnect or after missed candles.
     loading: bool,
-    loaded: Option<Loaded>,
-    error: Option<AppError>,
-    /// The open `source` candle, from the live feed.
+    loading_older: bool,
+    /// Closed `source` candles in memory, oldest first, without gaps.
+    candles: Vec<Candle>,
+    /// The open `source` candle.
     live: Option<Candle>,
+    /// Whether `candles` starts at the symbol's first candle.
+    complete: bool,
+    /// Candles of this series in the cache.
+    cached: u64,
+    error: Option<AppError>,
+    chart: Chart,
 }
 
 impl Selection {
@@ -103,6 +148,26 @@ impl Selection {
             timeframe: self.source,
         }
     }
+
+    /// Rebuilds the chart's candles from the closed ones and the open one.
+    fn refresh_chart(&mut self) {
+        let mut source = self.candles.clone();
+        if let Some(live) = self.live
+            && source
+                .last()
+                .is_none_or(|last| last.open_time < live.open_time)
+        {
+            source.push(live);
+        }
+        let shown = if self.timeframe == self.source {
+            source
+        } else {
+            aggregate_whole(&source, self.timeframe)
+        };
+        self.chart.set_candles(shown);
+        self.chart.set_history_complete(self.complete);
+        self.chart.set_loading_older(self.loading_older);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -116,8 +181,11 @@ enum Message {
     Feed(Market, FeedEvent),
     SymbolSelected(Market, String),
     TimeframeSelected(Timeframe),
-    LoadOlder,
+    ChartKindSelected(ChartKind),
+    PriceScaleToggled(PriceScale),
+    Chart(ChartMessage),
     SeriesLoaded(SeriesKey, Result<Loaded, AppError>),
+    OlderLoaded(SeriesKey, Result<Loaded, AppError>),
     CandleSaved(SeriesKey, Result<(), AppError>),
     Tick,
 }
@@ -152,6 +220,9 @@ impl Fitil {
             market: Market::Spot,
             search: String::new(),
             selection: None,
+            chart_kind: ChartKind::default(),
+            price_scale: PriceScale::default(),
+            pending_open: OpenRequest::from_args(std::env::args()),
         };
         let loads = Market::ALL.map(|market| app.load_market(market));
         (app, Task::batch(loads))
@@ -182,6 +253,12 @@ impl Fitil {
         match message {
             Message::LanguageSelected(language) => {
                 self.translations = Translations::new(language);
+                if let Some(selection) = &mut self.selection {
+                    let title =
+                        chart_title(&self.translations, &selection.symbol, selection.timeframe);
+                    selection.chart.set_title(title);
+                    selection.chart.set_labels(chart_labels(&self.translations));
+                }
             }
             Message::MarketSelected(market) => self.market = market,
             Message::SearchChanged(search) => self.search = search,
@@ -201,6 +278,10 @@ impl Fitil {
                             .map(|ticker| (ticker.symbol.clone(), ticker))
                             .collect();
                         state.load = Load::Ready;
+                        if let Some(request) = self.pending_open.take_if(|r| r.market == market) {
+                            self.market = market;
+                            return self.select(market, &request.symbol, request.timeframe);
+                        }
                     }
                     Err(error) => state.load = Load::Failed(error),
                 }
@@ -232,7 +313,29 @@ impl Fitil {
                     return self.select(market, &name, timeframe);
                 }
             }
-            Message::LoadOlder => return self.load_older(),
+            Message::ChartKindSelected(kind) => {
+                self.chart_kind = kind;
+                if let Some(selection) = &mut self.selection {
+                    selection.chart.set_kind(kind);
+                }
+            }
+            Message::PriceScaleToggled(scale) => {
+                // Pressing the active scale's button goes back to the linear scale.
+                self.price_scale = if self.price_scale == scale {
+                    PriceScale::Linear
+                } else {
+                    scale
+                };
+                if let Some(selection) = &mut self.selection {
+                    selection.chart.set_scale(self.price_scale);
+                }
+            }
+            Message::Chart(message) => {
+                if let Some(selection) = &mut self.selection {
+                    selection.chart.update(message);
+                }
+                return self.load_older_if_needed();
+            }
             Message::SeriesLoaded(key, result) => {
                 if let Some(selection) = &mut self.selection
                     && selection.key() == key
@@ -240,18 +343,43 @@ impl Fitil {
                     selection.loading = false;
                     match result {
                         Ok(loaded) => {
-                            // Keep the feed's candle unless the fetched one is newer.
-                            if let Some(open) = loaded.open
-                                && selection
-                                    .live
-                                    .is_none_or(|live| live.open_time < open.open_time)
-                            {
-                                selection.live = Some(open);
-                            }
-                            selection.loaded = Some(loaded);
+                            merge_newest(selection, loaded);
                             selection.error = None;
+                            selection.refresh_chart();
+                            return self.load_older_if_needed();
                         }
                         Err(error) => selection.error = Some(error),
+                    }
+                }
+            }
+            Message::OlderLoaded(key, result) => {
+                if let Some(selection) = &mut self.selection
+                    && selection.key() == key
+                {
+                    selection.loading_older = false;
+                    match result {
+                        Ok(older) => {
+                            let connects = match (older.candles.last(), selection.candles.first()) {
+                                (Some(last), Some(first)) => {
+                                    selection.source.next_bucket(last.open_time) == first.open_time
+                                }
+                                _ => false,
+                            };
+                            if connects {
+                                let mut candles = older.candles;
+                                candles.append(&mut selection.candles);
+                                selection.candles = candles;
+                            }
+                            selection.complete = older.complete;
+                            selection.cached = older.cached;
+                            selection.error = None;
+                            selection.refresh_chart();
+                            return self.load_older_if_needed();
+                        }
+                        Err(error) => {
+                            selection.error = Some(error);
+                            selection.chart.set_loading_older(false);
+                        }
                     }
                 }
             }
@@ -266,10 +394,7 @@ impl Fitil {
             Message::Tick => {
                 if let Some(selection) = &mut self.selection {
                     let now = self.clients[&selection.symbol.market].now();
-                    let bucket = selection.timeframe.bucket_start(now);
-                    if let Some(loaded) = &mut selection.loaded {
-                        loaded.recent.retain(|candle| candle.open_time >= bucket);
-                    }
+                    selection.chart.set_now(now);
                 }
             }
         }
@@ -284,10 +409,11 @@ impl Fitil {
                 state.connection = Connection::Connected;
                 // Candles may have closed while the connection was down; fetch them.
                 if reconnected
-                    && let Some(selection) = &mut self.selection
-                    && selection.symbol.market == market
+                    && self
+                        .selection
+                        .as_ref()
+                        .is_some_and(|selection| selection.symbol.market == market)
                 {
-                    selection.loading = true;
                     return self.open_series();
                 }
             }
@@ -331,35 +457,26 @@ impl Fitil {
         }
         if !closed {
             selection.live = Some(candle);
+            selection.refresh_chart();
             return Task::none();
         }
         selection.live = None;
 
         // While a load is running, it will pick this candle up itself.
-        let (Some(loaded), false) = (&mut selection.loaded, selection.loading) else {
+        let Some(last) = selection.candles.last().filter(|_| !selection.loading) else {
             return Task::none();
         };
-        let Some(range) = &mut loaded.range else {
-            return Task::none();
-        };
-        if candle.open_time <= range.newest {
+        if candle.open_time <= last.open_time {
             return Task::none();
         }
-        if timeframe.next_bucket(range.newest) != candle.open_time {
+        if timeframe.next_bucket(last.open_time) != candle.open_time {
             // Candles were missed; fill the gap from the exchange.
-            selection.loading = true;
             return self.open_series();
         }
 
-        range.newest = candle.open_time;
-        range.count += 1;
-        if selection.timeframe == timeframe
-            || selection.timeframe.bucket_start(candle.open_time) == candle.open_time
-        {
-            loaded.target_count += 1;
-        }
-        loaded.recent.push(candle);
-
+        selection.candles.push(candle);
+        selection.cached += 1;
+        selection.refresh_chart();
         let Ok(store) = &self.store else {
             return Task::none();
         };
@@ -391,14 +508,26 @@ impl Fitil {
             return Task::none();
         }
 
+        let chart = Chart::new(
+            chart_title(&self.translations, &symbol, timeframe),
+            timeframe,
+            symbol.price_decimals,
+            self.chart_kind,
+            self.price_scale,
+            chart_labels(&self.translations),
+        );
         let selection = Selection {
             symbol,
             timeframe,
             source,
-            loading: true,
-            loaded: None,
-            error: None,
+            loading: false,
+            loading_older: false,
+            candles: Vec::new(),
             live: None,
+            complete: false,
+            cached: 0,
+            error: None,
+            chart,
         };
         let topic = selection.topic();
         if let Some(previous) = self.selection.take()
@@ -414,43 +543,53 @@ impl Fitil {
         self.open_series()
     }
 
-    /// Loads the selected series from the cache and brings it up to date.
+    /// Loads the newest candles of the selected series, from the cache and the exchange.
     fn open_series(&mut self) -> Task<Message> {
-        self.series_task(data::open_series)
-    }
-
-    fn load_older(&mut self) -> Task<Message> {
-        match &mut self.selection {
-            Some(selection) if !selection.loading => selection.loading = true,
-            _ => return Task::none(),
-        }
-        self.series_task(data::load_older)
-    }
-
-    fn series_task<F>(
-        &mut self,
-        load: fn(Arc<BinanceClient>, SharedStore, SeriesKey, Timeframe) -> F,
-    ) -> Task<Message>
-    where
-        F: Future<Output = Result<Loaded, AppError>> + Send + 'static,
-    {
         let Some(selection) = &mut self.selection else {
             return Task::none();
         };
         let store = match &self.store {
             Ok(store) => store.clone(),
             Err(error) => {
-                selection.loading = false;
                 selection.error = Some(error.clone());
                 return Task::none();
             }
         };
+        selection.loading = true;
         let client = self.clients[&selection.symbol.market].clone();
         let key = selection.key();
-        let future = load(client, store, key.clone(), selection.timeframe);
-        Task::perform(future, move |result| {
-            Message::SeriesLoaded(key.clone(), result)
-        })
+        Task::perform(
+            data::open_series(client, store, key.clone(), selection.timeframe),
+            move |result| Message::SeriesLoaded(key.clone(), result),
+        )
+    }
+
+    /// Loads older candles when the chart has been moved close to the oldest one.
+    fn load_older_if_needed(&mut self) -> Task<Message> {
+        let Some(selection) = &mut self.selection else {
+            return Task::none();
+        };
+        if selection.loading || selection.loading_older || !selection.chart.wants_older() {
+            return Task::none();
+        }
+        let (Some(first), Ok(store)) = (selection.candles.first(), &self.store) else {
+            return Task::none();
+        };
+        let before = first.open_time;
+        selection.loading_older = true;
+        selection.chart.set_loading_older(true);
+        let client = self.clients[&selection.symbol.market].clone();
+        let key = selection.key();
+        Task::perform(
+            data::load_older(
+                client,
+                store.clone(),
+                key.clone(),
+                selection.timeframe,
+                before,
+            ),
+            move |result| Message::OlderLoaded(key.clone(), result),
+        )
     }
 
     fn load_market(&self, market: Market) -> Task<Message> {
@@ -471,6 +610,71 @@ impl Fitil {
         self.markets
             .get_mut(&market)
             .expect("every market has a state")
+    }
+}
+
+/// Puts freshly loaded newest candles into the selection, keeping older candles already
+/// in memory when they connect.
+fn merge_newest(selection: &mut Selection, loaded: Loaded) {
+    // Keep the feed's candle unless the fetched one is newer.
+    if let Some(open) = loaded.open
+        && selection
+            .live
+            .is_none_or(|live| live.open_time < open.open_time)
+    {
+        selection.live = Some(open);
+    }
+    selection.cached = loaded.cached;
+    let Some(first_new) = loaded.candles.first().map(|candle| candle.open_time) else {
+        selection.candles = loaded.candles;
+        selection.complete = loaded.complete;
+        return;
+    };
+    let older: Vec<Candle> = selection
+        .candles
+        .iter()
+        .take_while(|candle| candle.open_time < first_new)
+        .copied()
+        .collect();
+    let connects = older
+        .last()
+        .is_some_and(|last| selection.source.next_bucket(last.open_time) == first_new);
+    if connects {
+        selection.candles = older;
+        selection.candles.extend(loaded.candles);
+    } else {
+        selection.candles = loaded.candles;
+        selection.complete = loaded.complete;
+    }
+}
+
+fn chart_title(t: &Translations, symbol: &Symbol, timeframe: Timeframe) -> String {
+    let market = match symbol.market {
+        Market::Spot => t.get("market-spot"),
+        Market::UsdMFutures => t.get("market-futures"),
+    };
+    format!("{} · {timeframe} · Binance {market}", symbol.name)
+}
+
+fn chart_labels(t: &Translations) -> ChartLabels {
+    let list = |key: &str| -> Vec<String> {
+        t.get(key)
+            .split(',')
+            .map(|item| item.trim().to_owned())
+            .collect()
+    };
+    let months = list("chart-months");
+    let magnitudes = list("chart-magnitudes");
+    ChartLabels {
+        open: t.get("chart-open"),
+        high: t.get("chart-high"),
+        low: t.get("chart-low"),
+        close: t.get("chart-close"),
+        volume: t.get("chart-volume"),
+        months: std::array::from_fn(|i| months.get(i).cloned().unwrap_or_default()),
+        magnitudes: std::array::from_fn(|i| magnitudes.get(i).cloned().unwrap_or_default()),
+        day_suffix: t.get("chart-day-suffix"),
+        loading: t.get("chart-loading-older"),
     }
 }
 
@@ -499,4 +703,32 @@ fn live_feed(market: &Market) -> impl Stream<Item = Message> + use<> {
             forward
         );
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Option<OpenRequest> {
+        OpenRequest::from_args(args.iter().map(|arg| arg.to_string()))
+    }
+
+    #[test]
+    fn open_requests_come_from_the_command_line() {
+        assert_eq!(
+            parse(&["fitil", "--open", "futures:ethusdt:4h"]),
+            Some(OpenRequest {
+                market: Market::UsdMFutures,
+                symbol: "ETHUSDT".into(),
+                timeframe: "4h".parse().unwrap(),
+            })
+        );
+        assert_eq!(
+            parse(&["fitil", "--open", "spot:BTCUSDT"]).map(|r| r.timeframe.to_string()),
+            Some(DEFAULT_TIMEFRAME.into())
+        );
+        assert_eq!(parse(&["fitil"]), None);
+        assert_eq!(parse(&["fitil", "--open", "margin:BTCUSDT"]), None);
+        assert_eq!(parse(&["fitil", "--open", "spot:BTCUSDT:7x"]), None);
+    }
 }

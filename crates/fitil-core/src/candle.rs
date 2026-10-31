@@ -51,9 +51,30 @@ pub fn aggregate(candles: &[Candle], target: Timeframe) -> Vec<Candle> {
     merged
 }
 
+/// Like [`aggregate`], but skips the candles before the first `target` boundary, so the
+/// first result is never partial. The last one may still be (it is the open candle).
+pub fn aggregate_whole(candles: &[Candle], target: Timeframe) -> Vec<Candle> {
+    let first_boundary = candles
+        .iter()
+        .position(|candle| target.bucket_start(candle.open_time) == candle.open_time)
+        .unwrap_or(candles.len());
+    aggregate(&candles[first_boundary..], target)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn whole_aggregation_skips_a_partial_start() {
+        // Minutes 1 and 2 belong to the 0–3 bucket, which started before the data.
+        let minutes: Vec<Candle> = (1..=7).map(|m| candle(m, 1.0, 2.0, 0.5, 1.5)).collect();
+        let merged = aggregate_whole(&minutes, "3m".parse().unwrap());
+        let starts: Vec<i64> = merged.iter().map(|c| c.open_time / 60_000).collect();
+        assert_eq!(starts, [3, 6]);
+        assert_eq!(merged[0].trades, 6);
+        assert_eq!(merged[1].trades, 4); // still open: minutes 6 and 7
+    }
 
     fn candle(minute: i64, open: f64, high: f64, low: f64, close: f64) -> Candle {
         Candle {

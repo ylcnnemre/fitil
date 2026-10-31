@@ -137,3 +137,58 @@ Yapılan her şey tarih sırasıyla burada. En yeni kayıt en altta.
 - 3 canlı test geçti: REST, WebSocket (vadelinin yeni adresi dahil) ve veri katmanı.
 - fmt, clippy ve cargo-deny temiz.
 - Debug derlemede bellek yaklaşık 206 MB.
+
+---
+
+## 31 Ekim 2026: Oturum 1 (devam)
+
+### Adım 3: Grafik motoru (tamamlandı)
+
+**Yapılanlar:**
+- **Yeni crate `fitil-chart`:** iced Canvas üzerinde, sıfırdan yazıldı.
+  - `chart.rs`: Grafik durumu.
+    - Görünüm çubuk sırası (index) üzerinden tutuluyor: `right` (sağ kenardaki çubuk) ve `spacing` (çubuk başına piksel).
+    - Eski mumlar başa eklenince görünüm aynı yerde kalıyor. En yeni mum görünüyorsa yeni mumlar takip ediliyor.
+    - Fiyat aralığı otomatik ya da elle ayarlanıyor.
+    - Heikin Ashi dönüşümü burada.
+  - `scale.rs`:
+    - Log ve yüzde dönüşümleri, "yuvarlak" fiyat çizgileri (1, 2, 2,5 ve 5 katları).
+    - Yerel saate göre zaman etiketleri: saat, gün, ay adı, yıl.
+    - Geri sayım ve hacim kısaltmaları.
+  - `draw.rs`:
+    - İki katman çiziliyor. Önbellekli katman ızgara, hacim, mumlar ve eksenlerden oluşuyor. Her karede yeniden çizilen katman son fiyat, artı imleci ve göstergeden (lejant) oluşuyor.
+    - Fare olayları `ChartMessage` mesajlarına çevriliyor: Pan, Zoom, ScalePrice, ResetPrice, ResetView.
+    - Dikey sürükleme 12 pikseli geçince fiyat ölçeği elle ayarlanmış sayılıyor.
+  - Görünüm durumu uygulamada tutuluyor. Böylece Adım 6'da kaydedilebilecek ve grafikler arasında eşlenebilecek.
+- **`fitil-core`:** `aggregate_whole` eklendi. Özel zaman dilimlerinde baştaki eksik kova atlanıyor.
+- **`fitil-app`:**
+  - `data.rs`:
+    - `open_series` en yeni pencereyi döndürüyor (görüntülenen zaman diliminden 1000 mum kadar süre).
+    - `load_older(before)` önce önbelleğe, yoksa Binance'e gidiyor.
+  - Yeniden bağlanınca bellekteki eski mumlar korunarak yeniler ekleniyor (`merge_newest`).
+  - "Daha eski mumları yükle" düğmesi kaldırıldı. Grafik sola kaydırılınca yükleme kendiliğinden başlıyor (`Chart::wants_older`).
+  - Eski metin tabanlı ayrıntı paneli kaldırıldı. Yerine araç çubuğu, grafik ve kısa kullanım ipucu geldi. Fiyat listesi 400 piksel sabit genişlikte.
+  - `--open market:SYMBOL:tf` komut satırı seçeneği eklendi. Claude ekrana tıklayamadığı için bununla test ediyor.
+- **Testler:** 56 test (`fitil-chart` 14, `fitil-core` 12, `fitil-exchange` 15, `fitil-store` 7, `fitil-app` 8) ve 3 canlı test.
+
+**Ekran denetiminde bulunanlar:**
+- **Kırpma hatası:** Fiyat ölçeği elle ayarlanınca mumlar canvas'ın dışına, araç çubuğunun üstüne taşıyordu. Mumlar ve hacim artık `frame.with_clip(plot)` içinde çiziliyor.
+- **Sütun aralığı:** Fiyat listesindeki sütunlar sıkışıktı, aralık eklendi.
+
+**Ekranda doğrulananlar** (BTCUSDT 1h ve ETHUSDT Vadeli 45m):
+- mumlar ve hacim,
+- eksen etiketleri (gün numaraları),
+- son fiyat kutusu ve geri sayım,
+- artı imleci ve zaman etiketi ("29 Eki 2026 01:30"),
+- özel zaman diliminin 15m'den üretilmesi,
+- uzaklaştırınca eski sayfaların kendiliğinden yüklenmesi.
+
+Bu denemeleri proje sahibi uygulamayı kullanırken yaptı.
+
+**Proje sahibinin sorusu:** "Grafik ekranını biz mi yaptık, bir yerden mi aldık?"
+- Cevap: Grafik tamamen bizim, `fitil-chart` crate'inde sıfırdan yazıldı.
+- Dışarıdan sadece genel amaçlı kütüphaneler kullanıldı: iced (pencere ve çizim komutları), chrono (yerel saat).
+- TradingView'ın kütüphanesi ya da başka bir grafik kütüphanesi kullanılmadı. Flowsurface'tan kod alınmadı.
+- 1-2-5 fiyat çizgileri ve Heikin Ashi formülü herkesin kullandığı bilinen yöntemler.
+
+**Not:** Proje sahibi bir ara oturumu durdurdu ("durdurmak zorunda kaldım") ve "devam edelim" dedi. O sırada uygulamayı kullanıyordu. Claude yeniden başlatırken proje sahibinin açık penceresini kapatmış oldu. Bundan sonra kullanıcı uygulamayı kullanıyorsa süreç kapatılmamalı.

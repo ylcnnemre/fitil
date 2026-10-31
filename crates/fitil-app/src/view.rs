@@ -3,33 +3,35 @@
 
 use std::collections::HashMap;
 
-use fitil_core::{Market, Ticker, Timeframe, aggregate};
+use fitil_chart::{ChartKind, PriceScale};
+use fitil_core::{Market, Ticker, Timeframe};
 use iced::alignment::Horizontal;
 use iced::widget::{
     Column, button, column, container, pick_list, row, rule, scrollable, space, text, text_input,
 };
-use iced::{Element, Fill, FillPortion, Length};
+use iced::{Element, Fill, Length};
 
 use crate::i18n::Language;
-use crate::{Connection, Fitil, Load, Message, Selection, TIMEFRAME_CHOICES, data, format};
+use crate::{Connection, Fitil, Load, Message, TIMEFRAME_CHOICES, data, format};
 
 /// Rows shown in the watchlist; the rest are reachable by searching.
 const WATCHLIST_ROWS: usize = 100;
 
-const PRICE_WIDTH: f32 = 130.0;
-const CHANGE_WIDTH: f32 = 100.0;
+const WATCHLIST_WIDTH: f32 = 400.0;
+const PRICE_WIDTH: f32 = 110.0;
+const CHANGE_WIDTH: f32 = 90.0;
+const COLUMN_GAP: f32 = 12.0;
 
 pub fn view(app: &Fitil) -> Element<'_, Message> {
     column![
         top_bar(app),
         rule::horizontal(1),
         row![
-            container(watchlist(app)).width(FillPortion(2)).height(Fill),
+            container(watchlist(app))
+                .width(WATCHLIST_WIDTH)
+                .height(Fill),
             rule::vertical(1),
-            container(details(app))
-                .width(FillPortion(3))
-                .height(Fill)
-                .padding(20),
+            container(details(app)).width(Fill).height(Fill).padding(10),
         ]
         .height(Fill),
         rule::horizontal(1),
@@ -139,6 +141,7 @@ fn watchlist(app: &Fitil) -> Element<'_, Message> {
             .width(CHANGE_WIDTH)
             .align_x(Horizontal::Right),
     ]
+    .spacing(COLUMN_GAP)
     .padding([8, 16]);
 
     let rows = Column::with_children(tickers.iter().map(|ticker| {
@@ -157,16 +160,19 @@ fn watchlist(app: &Fitil) -> Element<'_, Message> {
         } else {
             button::text
         };
-        button(row![
-            text(&ticker.symbol).width(Fill),
-            text(format::price(ticker.last_price, decimals))
-                .width(PRICE_WIDTH)
-                .align_x(Horizontal::Right),
-            text(format::percent(change))
-                .width(CHANGE_WIDTH)
-                .align_x(Horizontal::Right)
-                .style(change_style),
-        ])
+        button(
+            row![
+                text(&ticker.symbol).width(Fill),
+                text(format::price(ticker.last_price, decimals))
+                    .width(PRICE_WIDTH)
+                    .align_x(Horizontal::Right),
+                text(format::percent(change))
+                    .width(CHANGE_WIDTH)
+                    .align_x(Horizontal::Right)
+                    .style(change_style),
+            ]
+            .spacing(COLUMN_GAP),
+        )
         .style(style)
         .width(Fill)
         .padding([4, 8])
@@ -201,187 +207,114 @@ fn watchlist(app: &Fitil) -> Element<'_, Message> {
     .into()
 }
 
+/// A chart type in the picker, shown with its translated name.
+#[derive(Debug, Clone, PartialEq)]
+struct KindChoice {
+    kind: ChartKind,
+    name: String,
+}
+
+impl std::fmt::Display for KindChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)
+    }
+}
+
+fn kind_key(kind: ChartKind) -> &'static str {
+    match kind {
+        ChartKind::Candles => "chart-kind-candles",
+        ChartKind::Bars => "chart-kind-bars",
+        ChartKind::Line => "chart-kind-line",
+        ChartKind::Area => "chart-kind-area",
+        ChartKind::HeikinAshi => "chart-kind-heikin-ashi",
+    }
+}
+
+/// The chart of the selected symbol, with its toolbar.
 fn details(app: &Fitil) -> Element<'_, Message> {
     let t = &app.translations;
     let Some(selection) = &app.selection else {
-        return text(t.get("detail-empty")).style(text::secondary).into();
-    };
-    let language = t.language();
-    let market_key = match selection.symbol.market {
-        Market::Spot => "market-spot",
-        Market::UsdMFutures => "market-futures",
+        return padded(text(t.get("detail-empty")).style(text::secondary));
     };
 
     let natives = fitil_exchange::binance::native_timeframes(selection.symbol.market);
-    let choices: Vec<Timeframe> = TIMEFRAME_CHOICES
+    let timeframes: Vec<Timeframe> = TIMEFRAME_CHOICES
         .iter()
         .filter_map(|choice| choice.parse::<Timeframe>().ok())
         .filter(|timeframe| timeframe.best_source(natives).is_some())
         .collect();
+    let kinds: Vec<KindChoice> = ChartKind::ALL
+        .into_iter()
+        .map(|kind| KindChoice {
+            kind,
+            name: t.get(kind_key(kind)),
+        })
+        .collect();
+    let current_kind = kinds
+        .iter()
+        .find(|choice| choice.kind == app.chart_kind)
+        .cloned();
+    let scale_button = |scale: PriceScale, key: &str| {
+        let style = if app.price_scale == scale {
+            button::primary
+        } else {
+            button::secondary
+        };
+        button(text(t.get(key)).size(14))
+            .style(style)
+            .on_press(Message::PriceScaleToggled(scale))
+    };
 
-    let mut timeframe_row = row![
-        text(t.get("detail-timeframe")),
+    let mut info = t.get_with(
+        "detail-cached",
+        &[
+            ("count", format::count(selection.cached, t.language())),
+            ("timeframe", selection.source.to_string()),
+        ],
+    );
+    if selection.source != selection.timeframe {
+        info.push_str(" · ");
+        info.push_str(&t.get_with("detail-source", &[("source", selection.source.to_string())]));
+    }
+    if selection.complete {
+        info.push_str(" · ");
+        info.push_str(&t.get("detail-complete"));
+    }
+
+    let toolbar = row![
         pick_list(
-            choices,
+            timeframes,
             Some(selection.timeframe),
             Message::TimeframeSelected
         )
-        .width(110),
+        .width(90),
+        pick_list(kinds, current_kind, |choice| Message::ChartKindSelected(
+            choice.kind
+        ))
+        .width(150),
+        scale_button(PriceScale::Logarithmic, "scale-log"),
+        scale_button(PriceScale::Percent, "scale-percent"),
+        space().width(Fill),
+        text(info).size(13).style(text::secondary),
     ]
-    .spacing(10)
+    .spacing(8)
     .align_y(iced::Center);
-    if selection.source != selection.timeframe {
-        timeframe_row = timeframe_row.push(
-            text(t.get_with("detail-source", &[("source", selection.source.to_string())]))
-                .style(text::secondary),
-        );
-    }
 
-    let mut content = column![
-        row![
-            text(&selection.symbol.name).size(28),
-            text(t.get(market_key)).size(16).style(text::secondary),
-        ]
-        .spacing(12)
-        .align_y(iced::Center),
-        timeframe_row,
-        rule::horizontal(1),
-        open_candle(app, selection),
-        rule::horizontal(1),
-    ]
-    .spacing(16);
-
-    if let Some(loaded) = &selection.loaded {
-        let mut cache = column![text(t.get_with(
-            "detail-cached",
-            &[
-                (
-                    "count",
-                    format::count(loaded.range.map_or(0, |r| r.count), language)
-                ),
-                ("timeframe", selection.source.to_string()),
-            ],
-        ))]
-        .spacing(6);
-        if selection.source != selection.timeframe {
-            cache = cache.push(text(t.get_with(
-                "detail-built",
-                &[
-                    ("count", format::count(loaded.target_count, language)),
-                    ("timeframe", selection.timeframe.to_string()),
-                ],
-            )));
-        }
-        if let Some(range) = loaded.range {
-            cache = cache
-                .push(text(t.get_with(
-                    "detail-oldest",
-                    &[("time", format::date_time(range.oldest))],
-                )))
-                .push(text(t.get_with(
-                    "detail-newest",
-                    &[("time", format::date_time(range.newest))],
-                )));
-        }
-        cache = cache.push(
-            text(t.get_with(
-                "detail-last-load",
-                &[
-                    ("cached", format::count(loaded.from_cache, language)),
-                    ("downloaded", format::count(loaded.downloaded, language)),
-                ],
-            ))
-            .style(text::secondary),
-        );
-        if loaded.complete {
-            cache = cache.push(text(t.get("detail-complete")).style(text::success));
-        }
-        content = content.push(cache);
-    }
-
-    let older = if selection.loading {
-        button(text(t.get("detail-loading")))
-    } else if selection
-        .loaded
-        .as_ref()
-        .is_some_and(|loaded| loaded.complete)
-    {
-        button(text(t.get("detail-load-older")))
-    } else {
-        button(text(t.get("detail-load-older"))).on_press(Message::LoadOlder)
-    };
-    content = content.push(older);
-
+    let mut content = column![toolbar].spacing(8);
     if let Some(error) = &selection.error {
         content = content.push(text(error.message(t)).style(text::danger));
     }
-
-    scrollable(content).height(Fill).into()
-}
-
-/// The displayed timeframe's current candle, built from the cached closed candles
-/// inside it plus the live one.
-fn open_candle<'a>(app: &'a Fitil, selection: &'a Selection) -> Element<'a, Message> {
-    let t = &app.translations;
-    let now = app.clients[&selection.symbol.market].now();
-    let bucket = selection.timeframe.bucket_start(now);
-
-    let mut parts: Vec<_> = selection
-        .loaded
-        .iter()
-        .flat_map(|loaded| loaded.recent.iter().copied())
-        .filter(|candle| candle.open_time >= bucket)
-        .collect();
-    if let Some(live) = selection.live
-        && live.open_time >= bucket
-        && parts
-            .last()
-            .is_none_or(|last| last.open_time < live.open_time)
-    {
-        parts.push(live);
-    }
-    let current = aggregate(&parts, selection.timeframe).pop();
-
-    let closes_in = t.get_with(
-        "detail-closes-in",
-        &[(
-            "time",
-            format::countdown(selection.timeframe.next_bucket(now) - now, t.language()),
-        )],
-    );
-    let candle_text: Element<'_, Message> = match current {
-        Some(candle) => {
-            let decimals = selection.symbol.price_decimals;
-            let style = if candle.close >= candle.open {
-                text::success
-            } else {
-                text::danger
-            };
-            text(t.get_with(
-                "detail-ohlc",
-                &[
-                    ("open", format::price(candle.open, decimals)),
-                    ("high", format::price(candle.high, decimals)),
-                    ("low", format::price(candle.low, decimals)),
-                    ("close", format::price(candle.close, decimals)),
-                ],
-            ))
-            .size(18)
-            .style(style)
+    let chart: Element<'_, Message> = if selection.candles.is_empty() && selection.loading {
+        container(text(t.get("detail-loading")).style(text::secondary))
+            .center(Fill)
             .into()
-        }
-        _ => text(t.get("detail-waiting")).style(text::secondary).into(),
+    } else {
+        selection.chart.view().map(Message::Chart)
     };
-
-    column![
-        text(t.get("detail-open-candle"))
-            .size(14)
-            .style(text::secondary),
-        candle_text,
-        text(closes_in),
-    ]
-    .spacing(6)
-    .into()
+    content
+        .push(chart)
+        .push(text(t.get("chart-hint")).size(12).style(text::secondary))
+        .into()
 }
 
 fn status_bar(app: &Fitil) -> Element<'_, Message> {

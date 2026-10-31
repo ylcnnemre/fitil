@@ -8,3 +8,6 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+chrono.workspace = true
+fitil-core.workspace = true
+iced.workspace = true

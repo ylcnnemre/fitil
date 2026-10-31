@@ -25,6 +25,12 @@ Claude ekranı doğrudan göremez. Arayüzde bir değişiklikten sonra:
 
 **Tıklama yok:** iced, PostMessage ile gönderilen tıklamaları kabul etmiyor. Bu yüzden tıklama gerektiren akışları proje sahibi dener. Mantık birim testleri ve canlı testlerle doğrulanır.
 
+**Grafik açarak test:** `Start-Process target\debug\fitil.exe -ArgumentList "--open","futures:ETHUSDT:45m"` grafiği tıklamadan açar.
+
+**Açık pencereye dikkat:** Proje sahibi o sırada uygulamayı kullanıyor olabilir. Ekran görüntüsünde imleç veya değişmiş bir görünüm varsa `fitil` sürecini kapatmadan önce sor ya da yeniden başlatmadan doğrula.
+
+**`python3` kullanma:** Bu makinede `python3` komutu Windows Store'un yer tutucusu ve komutu sonsuza kadar bekletiyor. Betikler için `node` kullan (v22 kurulu).
+
 **Spot sembol listesi yavaş:** Debug derlemede spot exchangeInfo büyük olduğu için açılışta yaklaşık 10–15 saniye sürüyor. Release derlemede çok daha hızlı.
 
 ## Binance notları
@@ -72,7 +78,7 @@ Bir Cargo workspace olarak kuruldu, ayrıntısı `docs/TASARIM.md` §6.1'de.
 | `crates/fitil-exchange` | Borsa adaptörleri |
 | `crates/fitil-store` | SQLite |
 | `crates/fitil-indicators` | İndikatör hesaplamaları |
-| `crates/fitil-chart` | Grafik motoru |
+| `crates/fitil-chart` | Grafik motoru (iced Canvas, sıfırdan yazıldı) |
 | `crates/fitil-app` | Uygulamanın kendisi, iced arayüzü |
 | `locales/<dil>/fitil.ftl` | Arayüz metinleri |
 
@@ -108,6 +114,20 @@ Yeni bir dil eklemek için `locales/` altına yeni bir klasör açılır, dosya 
   - `rule::horizontal(1)`, `space().width(Fill)`, `iced::padding::bottom(10)`
   - Padding için 4 elemanlı dizi kabul edilmiyor.
 - **Kaynak kodu:** iced'in kaynağı `~/.cargo/registry/src/*/iced_*-0.14*` altında. API'den şüphe edilirse oraya bakılır.
+- **Canvas (iced'in `canvas` özelliği açık):**
+  - `canvas::Program::update` fonksiyonu `Option<Action<Message>>` döndürür: `Action::publish(m).and_capture()` ya da `Action::request_redraw()`.
+  - Çizim için `Frame::fill_rectangle`, `stroke`, `fill_text` ve `with_clip(rect, |frame| …)` kullanılır.
+  - Canvas kendi alanını kendisi kırpmaz. Taşabilecek her şey `with_clip` ile çizilmeli.
+  - `canvas::Cache` boyut değişince kendiliğinden yeniden çizer, aksi hâlde `clear()` gerekir.
+- **`iced::mouse` modülü Click yardımcısını dışarı açmıyor.** Çift tıklama `draw.rs` içinde zaman ve mesafe kontrolüyle algılanıyor.
+
+## Grafik motoru (`fitil-chart`)
+
+- **Durum:** `Chart` kendi canvas'ının programıdır (`impl canvas::Program<ChartMessage> for Chart`). Uygulama `chart.view().map(Message::Chart)` ile gösterir, gelen mesajı `chart.update(msg)` ile uygular.
+- **Görünüm:** Görünüm çubuk sırası üzerinden tutulur. Zaman ekseni çubuk sırasıyla ilerler: boşluklar veya ay uzunlukları sorun olmaz.
+- **Eski mumlar:** Eski mumlar `set_candles` ile tüm dizi verilerek eklenir. Grafik, eski ilk mumun yeni dizideki yerini bulup görünümü kaydırır.
+- **Etiketler:** Grafiğin dil metinleri (`ChartLabels`) uygulamadan, Fluent'ten gelir. `chart-months` ve `chart-magnitudes` anahtarları virgülle ayrılmış listelerdir.
+- **Renkler:** Yükselen #2EBD85, düşen #F6465D. Şimdilik sabit, Adım 7'de ayarlanabilir olacak.
 
 ## Dikkat edilecekler
 

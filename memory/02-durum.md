@@ -1,41 +1,41 @@
 # Şu Anki Durum
 
-**Son güncelleme:** 30 Ekim 2026
+**Son güncelleme:** 31 Ekim 2026
 
 ## Neredeyiz?
 
 - **Tasarım:** `docs/TASARIM.md` onaylı.
 - **Adım 1 tamamlandı:** iskelet, GitHub deposu, CI.
-- **Adım 2 tamamlandı:** Binance bağlantısı ve yerel depo. Ayrıntılar `03-gunluk.md` dosyasında.
+- **Adım 2 tamamlandı:** Binance bağlantısı ve yerel önbellek.
+- **Adım 3 tamamlandı:** grafik motoru. Ayrıntılar `03-gunluk.md` dosyasında.
 
 Uygulama şu an şunları gösteriyor:
-- Solda canlı fiyat listesi: Spot ve Vadeli sekmeleri, arama, dolar hacmine göre ilk 100 sembol.
-- Sağda seçilen sembolün ayrıntıları:
-  - zaman dilimi seçici (özel zaman dilimleri dahil),
-  - açık mum ve kapanışa kalan süre,
-  - önbellek bilgisi ve "Daha eski mumları yükle" düğmesi.
-- Altta durum çubuğu: bağlantı durumu, istek ağırlığı, saat farkı, önbellek yolu, sürüm.
+- **Solda canlı fiyat listesi:** Spot ve Vadeli sekmeleri, arama, dolar hacmine göre ilk 100 sembol.
+- **Sağda seçilen sembolün grafiği:**
+  - Araç çubuğu: zaman dilimi (özel olanlar dahil), grafik tipi (Mum, Çubuk, Çizgi, Alan, Heikin Ashi), Log ve % düğmeleri, önbellek bilgisi.
+  - Grafik: hacim, ızgara, fiyat ve zaman eksenleri, artı imleci, gösterge (lejant), son fiyat ve geri sayım.
+  - Etkileşim: tekerlekle yakınlaştırma, sürükleyerek kaydırma, eksenleri sürükleyerek ölçekleme, çift tıklayarak sıfırlama.
+  - Sola kaydırınca eski mumlar kendiliğinden yükleniyor.
+- **Altta durum çubuğu.**
+- **Komut satırı:** `fitil --open spot:BTCUSDT:1h` grafiği doğrudan açar. Claude test için bunu kullanıyor.
 
 ## Proje sahibinin denemesi beklenenler
 
-Bunları Claude tıklayamadığı için deneyemedi:
-- Zaman dilimini 45m gibi özel bir değere çevirmek.
-- Vadeli sekmesi.
-- Arama kutusu.
-- English düğmesi.
-- İnterneti kesip geri açınca durum çubuğunun "Bağlantı koptu…" deyip toparlanması.
+- Grafik tiplerini ve Log/% ölçeklerini denemek.
+- Sola doğru uzun kaydırıp geçmişin yüklenmesini izlemek.
+- 1d / 1w gibi uzun zaman dilimlerinde ay ve yıl etiketlerine bakmak.
+- Adım 2'den kalanlar: English düğmesi, arama kutusu, internet kesilince toparlanma.
 
-Veri katmanı ise gerçek Binance'e karşı testlerle doğrulandı.
+Proje sahibi Adım 3 sırasında grafiği zaten kullandı (ETHUSDT 45m): yakınlaştırdı, kaydırdı ve eski mumlar kendiliğinden yüklendi.
 
-## Sıradaki adım: Adım 3, grafik motoru
+## Sıradaki adım: Adım 4, indikatörler ve paneller
 
 Henüz başlanmadı, proje sahibinin onayı bekleniyor. Taslak plan:
-- `fitil-chart` crate'i:
-  - iced Canvas üzerinde mum çizimi,
-  - fiyat ve zaman eksenleri,
-  - fare tekerleğiyle yakınlaştırma, sürükleyerek kaydırma, eksen sürükleyerek ölçekleme,
-  - artı imleci ve OHLC bilgisi,
-  - son fiyat çizgisi ve geri sayım.
-- Grafik sola kaydırıldıkça `data::load_older` ile otomatik geçmiş yükleme. Şu an bu iş bir düğmeyle yapılıyor.
-- Ayrıntı panelindeki metin bilgilerinin yerini grafik alacak.
-- Özel zaman dilimlerinde baştaki eksik mum atlanacak: `aggregate` ilk ve son kovayı yarım üretebiliyor.
+- **`fitil-indicators` crate'i:** `docs/TASARIM.md` §4.3'teki indikatörler. Artımlı hesaplanacaklar ve bilinen referans değerlerle test edilecekler.
+- **Grafik:**
+  - Ana grafiğin üstüne çizilen indikatörler (MA, Bollinger, VWAP, SuperTrend, Ichimoku…).
+  - Alt paneller (RSI, MACD, Stokastik, ATR, OBV, CVD…), panel yüksekliği sürüklenebilir.
+  - Hacim de ayrı panele alınabilecek.
+- **Arayüz:** İndikatör ekleme penceresi (arama ile) ve ayar penceresi (periyot, kaynak, renk, kalınlık, görünürlük).
+- **İndikatör şablonları** (§4.3).
+- **Grafik ayarları:** Grafik tipi ve ölçek şu an sadece uygulama açıkken hatırlanıyor. Kalıcı kayıt Adım 6'da.

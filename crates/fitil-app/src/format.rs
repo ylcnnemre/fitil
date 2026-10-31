@@ -1,6 +1,4 @@
-//! Turning numbers and times into display text.
-
-use chrono::{Local, TimeZone};
+//! Turning numbers into display text.
 
 use crate::i18n::Language;
 
@@ -40,37 +38,6 @@ pub fn seconds(ms: i64, language: Language) -> String {
     }
 }
 
-/// A timestamp in the computer's time zone, e.g. `2026-10-30 22:00`.
-pub fn date_time(ms: i64) -> String {
-    Local
-        .timestamp_millis_opt(ms)
-        .single()
-        .map(|time| time.format("%Y-%m-%d %H:%M").to_string())
-        .unwrap_or_default()
-}
-
-/// Time left as `05:09` or `03:12:05`, with days in front when needed (`2g 03:12:05`).
-pub fn countdown(ms: i64, language: Language) -> String {
-    let total = ms.max(0) / 1000;
-    let (days, hours, minutes, seconds) = (
-        total / 86_400,
-        total % 86_400 / 3_600,
-        total % 3_600 / 60,
-        total % 60,
-    );
-    let day = match language {
-        Language::Turkish => "g",
-        Language::English => "d",
-    };
-    if days > 0 {
-        format!("{days}{day} {hours:02}:{minutes:02}:{seconds:02}")
-    } else if hours > 0 {
-        format!("{hours:02}:{minutes:02}:{seconds:02}")
-    } else {
-        format!("{minutes:02}:{seconds:02}")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,13 +63,5 @@ mod tests {
     fn seconds_use_the_decimal_separator() {
         assert_eq!(seconds(312, Language::Turkish), "+0,3");
         assert_eq!(seconds(-1_250, Language::English), "-1.2");
-    }
-
-    #[test]
-    fn countdowns() {
-        assert_eq!(countdown(309_000, Language::Turkish), "05:09");
-        assert_eq!(countdown(11_525_000, Language::English), "03:12:05");
-        assert_eq!(countdown(184_325_000, Language::Turkish), "2g 03:12:05");
-        assert_eq!(countdown(-5, Language::English), "00:00");
     }
 }

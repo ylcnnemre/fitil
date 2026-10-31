@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use fitil_core::{Candle, SeriesKey, Symbol, Ticker, Timeframe, aggregate};
+use fitil_core::{Candle, SeriesKey, Symbol, Ticker, Timeframe};
 use fitil_exchange::binance::{BinanceClient, MAX_CANDLES_PER_REQUEST};
 use fitil_store::{SeriesRange, Store};
 
@@ -46,22 +46,25 @@ pub async fn load_market(client: Arc<BinanceClient>) -> Result<MarketSnapshot, A
     })
 }
 
-/// The state of a cached series after a load.
+/// Candles of the displayed timeframe brought into memory by each load.
+const WINDOW_BARS: i64 = 1000;
+
+/// How far back in time one load reaches for `target`.
+fn window_span(target: Timeframe) -> i64 {
+    target.duration_ms().unwrap_or(31 * 86_400_000) * WINDOW_BARS
+}
+
+/// A stretch of a series, ready to show.
 #[derive(Debug, Clone)]
 pub struct Loaded {
-    /// Candles that were already cached before this load.
-    pub from_cache: u64,
-    /// Candles downloaded by this load.
-    pub downloaded: u64,
-    pub range: Option<SeriesRange>,
-    /// How many candles of the displayed timeframe the cache makes up.
-    pub target_count: u64,
-    /// Whether the cache reaches back to the symbol's first candle.
-    pub complete: bool,
-    /// Closed candles inside the displayed timeframe's current candle.
-    pub recent: Vec<Candle>,
+    /// Closed candles, oldest first, without gaps.
+    pub candles: Vec<Candle>,
     /// The candle still open on the exchange, when this load fetched it.
     pub open: Option<Candle>,
+    /// Whether `candles` reaches back to the symbol's first candle.
+    pub complete: bool,
+    /// Candles in the cache for this series.
+    pub cached: u64,
 }
 
 /// Brings a series up to date: downloads the newest candles if nothing is cached,
@@ -80,10 +83,9 @@ pub async fn open_series(
 
     let request_span =
         key.timeframe.duration_ms().unwrap_or(31 * 86_400_000) * MAX_CANDLES_PER_REQUEST as i64;
-    let (from_cache, downloaded) = match cached {
+    match cached {
         Some(range) if client.now() - range.newest <= MAX_FILL_REQUESTS * request_span => {
-            let downloaded = fill_forward(&client, &store, &key, range.newest).await?;
-            (range.count, downloaded)
+            fill_forward(&client, &store, &key, range.newest).await?;
         }
         stale => {
             if stale.is_some() {
@@ -93,9 +95,9 @@ pub async fn open_series(
                 })
                 .await?;
             }
-            (0, download_latest(&client, &store, &key).await?)
+            download_latest(&client, &store, &key).await?;
         }
-    };
+    }
 
     // The live feed only sends a candle when it trades, so fetch the open one now.
     let latest = client
@@ -106,28 +108,99 @@ pub async fn open_series(
         .into_iter()
         .find(|candle| key.timeframe.next_bucket(candle.open_time) > now);
 
-    let mut loaded = summarize(&client, &store, key, target, from_cache, downloaded).await?;
-    loaded.open = open;
-    Ok(loaded)
+    let span = window_span(target);
+    with_store(&store, move |store| {
+        let Some(range) = store.range(&key)? else {
+            return Ok(Loaded {
+                candles: Vec::new(),
+                open,
+                complete: false,
+                cached: 0,
+            });
+        };
+        let candles = store.candles(&key, range.newest - span + 1, range.newest)?;
+        let complete = reaches_start(store, &key, range, &candles, range.newest)?;
+        Ok(Loaded {
+            candles,
+            open,
+            complete,
+            cached: range.count,
+        })
+    })
+    .await
 }
 
-/// Downloads one more page of candles before the oldest cached one.
+/// The candles before `before`: from the cache when it has them, otherwise one more
+/// page downloaded from the exchange.
 pub async fn load_older(
     client: Arc<BinanceClient>,
     store: SharedStore,
     key: SeriesKey,
     target: Timeframe,
+    before: i64,
 ) -> Result<Loaded, AppError> {
-    let (range, start) = with_store(&store, {
+    let span = window_span(target);
+    let cached = with_store(&store, {
+        let key = key.clone();
+        move |store| store.candles(&key, before - span, before - 1)
+    })
+    .await?;
+    if cached.is_empty() {
+        download_older(&client, &store, &key).await?;
+    }
+
+    with_store(&store, move |store| {
+        let Some(range) = store.range(&key)? else {
+            return Ok(Loaded {
+                candles: Vec::new(),
+                open: None,
+                complete: true,
+                cached: 0,
+            });
+        };
+        let candles = store.candles(&key, before - span, before - 1)?;
+        let complete = reaches_start(store, &key, range, &candles, before)?;
+        Ok(Loaded {
+            candles,
+            open: None,
+            complete,
+            cached: range.count,
+        })
+    })
+    .await
+}
+
+/// Whether `candles` (or, if empty, the point `before`) is at the symbol's first candle.
+fn reaches_start(
+    store: &Store,
+    key: &SeriesKey,
+    range: SeriesRange,
+    candles: &[Candle],
+    before: i64,
+) -> fitil_store::Result<bool> {
+    let at_oldest = candles.first().map_or(before <= range.oldest, |candle| {
+        candle.open_time == range.oldest
+    });
+    Ok(at_oldest && store.history_start(key)? == Some(range.oldest))
+}
+
+/// Downloads one page of candles before the oldest cached one, unless the cache
+/// already reaches the symbol's first candle.
+async fn download_older(
+    client: &BinanceClient,
+    store: &SharedStore,
+    key: &SeriesKey,
+) -> Result<(), AppError> {
+    let (range, start) = with_store(store, {
         let key = key.clone();
         move |store| Ok((store.range(&key)?, store.history_start(&key)?))
     })
     .await?;
     let Some(range) = range else {
-        return open_series(client, store, key, target).await;
+        return Ok(());
     };
     if start == Some(range.oldest) {
-        return summarize(&client, &store, key, target, range.count, 0).await;
+        return Ok(());
     }
 
     let page = client
@@ -139,10 +212,9 @@ pub async fn load_older(
             MAX_CANDLES_PER_REQUEST,
         )
         .await?;
-    let downloaded = page.len() as u64;
     let reached_start = page.len() < MAX_CANDLES_PER_REQUEST;
     let first = page.first().map_or(range.oldest, |candle| candle.open_time);
-    with_store(&store, {
+    with_store(store, {
         let key = key.clone();
         move |store| {
             store.save_candles(&key, &page)?;
@@ -152,9 +224,7 @@ pub async fn load_older(
             Ok(())
         }
     })
-    .await?;
-
-    summarize(&client, &store, key, target, range.count, downloaded).await
+    .await
 }
 
 pub async fn save_candle(
@@ -165,12 +235,12 @@ pub async fn save_candle(
     with_store(&store, move |store| store.save_candles(&key, &[candle])).await
 }
 
-/// Saves the newest page of closed candles and returns how many were saved.
+/// Saves the newest page of closed candles.
 async fn download_latest(
     client: &BinanceClient,
     store: &SharedStore,
     key: &SeriesKey,
-) -> Result<u64, AppError> {
+) -> Result<(), AppError> {
     let page = client
         .candles(
             &key.symbol,
@@ -182,7 +252,6 @@ async fn download_latest(
         .await?;
     let reached_start = page.len() < MAX_CANDLES_PER_REQUEST;
     let closed = closed_only(client, key.timeframe, page);
-    let saved = closed.len() as u64;
     with_store(store, {
         let key = key.clone();
         move |store| {
@@ -193,23 +262,21 @@ async fn download_latest(
             Ok(())
         }
     })
-    .await?;
-    Ok(saved)
+    .await
 }
 
-/// Downloads the closed candles after `newest` and returns how many were saved.
+/// Downloads and saves the closed candles after `newest`.
 async fn fill_forward(
     client: &BinanceClient,
     store: &SharedStore,
     key: &SeriesKey,
     mut newest: i64,
-) -> Result<u64, AppError> {
-    let mut saved = 0;
+) -> Result<(), AppError> {
     loop {
         let start = key.timeframe.next_bucket(newest);
         if key.timeframe.next_bucket(start) > client.now() {
             // The candle after `newest` is still open.
-            return Ok(saved);
+            return Ok(());
         }
         let page = client
             .candles(
@@ -223,17 +290,16 @@ async fn fill_forward(
         let full = page.len() == MAX_CANDLES_PER_REQUEST;
         let closed = closed_only(client, key.timeframe, page);
         let Some(last) = closed.last() else {
-            return Ok(saved);
+            return Ok(());
         };
         newest = last.open_time;
-        saved += closed.len() as u64;
         with_store(store, {
             let key = key.clone();
             move |store| store.save_candles(&key, &closed)
         })
         .await?;
         if !full {
-            return Ok(saved);
+            return Ok(());
         }
     }
 }
@@ -246,43 +312,6 @@ fn closed_only(
     let now = client.now();
     candles.retain(|candle| timeframe.next_bucket(candle.open_time) <= now);
     candles
-}
-
-async fn summarize(
-    client: &BinanceClient,
-    store: &SharedStore,
-    key: SeriesKey,
-    target: Timeframe,
-    from_cache: u64,
-    downloaded: u64,
-) -> Result<Loaded, AppError> {
-    let bucket = target.bucket_start(client.now());
-    with_store(store, move |store| {
-        let range = store.range(&key)?;
-        let complete = match range {
-            Some(range) => store.history_start(&key)? == Some(range.oldest),
-            None => false,
-        };
-        let target_count = match range {
-            Some(range) if target != key.timeframe => {
-                let all = store.candles(&key, range.oldest, range.newest)?;
-                aggregate(&all, target).len() as u64
-            }
-            Some(range) => range.count,
-            None => 0,
-        };
-        let recent = store.candles(&key, bucket, i64::MAX)?;
-        Ok(Loaded {
-            from_cache,
-            downloaded,
-            range,
-            target_count,
-            complete,
-            recent,
-            open: None,
-        })
-    })
-    .await
 }
 
 /// Runs a cache operation on a blocking thread so the UI stays responsive.
@@ -323,41 +352,48 @@ mod tests {
             symbol: "BTCUSDT".into(),
             timeframe: source,
         };
-        let contiguous =
-            |range: SeriesRange| (range.newest - range.oldest) / step + 1 == range.count as i64;
+        let contiguous = |candles: &[Candle]| {
+            candles
+                .windows(2)
+                .all(|pair| pair[1].open_time - pair[0].open_time == step)
+        };
 
-        // First open: nothing cached, one page downloaded; the open candle is left out.
+        // First open: nothing cached, one page downloaded; the open candle comes separately.
         let first = open_series(client.clone(), store.clone(), key.clone(), target)
             .await
             .unwrap();
-        let range = first.range.unwrap();
-        assert_eq!(first.from_cache, 0);
-        assert_eq!(first.downloaded, range.count);
-        assert!((999..=1000).contains(&range.count), "{}", range.count);
-        assert!(contiguous(range));
+        let count = first.candles.len();
+        assert!((999..=1000).contains(&count), "{count}");
+        assert_eq!(first.cached, count as u64);
+        assert!(contiguous(&first.candles));
+        let newest = first.candles.last().unwrap().open_time;
         let open = first.open.expect("the open candle is fetched");
-        assert_eq!(open.open_time, source.next_bucket(range.newest));
-        assert!((range.count / 3..=range.count / 3 + 2).contains(&first.target_count));
+        assert_eq!(open.open_time, source.next_bucket(newest));
         assert!(!first.complete);
 
-        // Opening again uses the cache and downloads at most a candle that just closed.
+        // Opening again uses the cache and adds at most a candle that just closed.
         let again = open_series(client.clone(), store.clone(), key.clone(), target)
             .await
             .unwrap();
-        assert_eq!(again.from_cache, range.count);
-        assert!(again.downloaded <= 1);
-        assert!(contiguous(again.range.unwrap()));
+        assert!(again.cached == first.cached || again.cached == first.cached + 1);
+        assert!(contiguous(&again.candles));
 
-        // Paging back adds a full page right before the oldest candle.
-        let older = load_older(client.clone(), store.clone(), key.clone(), target)
+        // Going back downloads a full page that ends right before the first candle.
+        let oldest = first.candles[0].open_time;
+        let older = load_older(client.clone(), store.clone(), key.clone(), target, oldest)
             .await
             .unwrap();
-        let older_range = older.range.unwrap();
-        assert_eq!(older.downloaded, MAX_CANDLES_PER_REQUEST as u64);
-        assert_eq!(
-            older_range.oldest,
-            range.oldest - MAX_CANDLES_PER_REQUEST as i64 * step
-        );
-        assert!(contiguous(older_range));
+        assert_eq!(older.candles.len(), MAX_CANDLES_PER_REQUEST);
+        assert_eq!(older.candles.last().unwrap().open_time + step, oldest);
+        assert!(contiguous(&older.candles));
+        assert!(!older.complete);
+
+        // Asking again is answered from the cache.
+        let cached_before = older.cached;
+        let again = load_older(client, store, key, target, oldest)
+            .await
+            .unwrap();
+        assert_eq!(again.cached, cached_before);
+        assert_eq!(again.candles, older.candles);
     }
 }
