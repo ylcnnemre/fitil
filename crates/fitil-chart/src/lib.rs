@@ -1,11 +1,14 @@
 //! The Fitil chart engine and drawing tools.
 //!
-//! [`Chart`] holds the candles and the view (which bars and prices are visible).
-//! Its canvas turns mouse input into [`ChartMessage`]s; the application passes them
-//! back to [`Chart::update`], so the view can also be saved or shared between charts.
+//! [`Chart`] holds the candles, the indicators to draw ([`Study`]) and the view (which
+//! bars and prices are visible, how tall each indicator pane is). Its canvas turns mouse
+//! input into [`ChartMessage`]s; the application passes them back to [`Chart::update`],
+//! so the view can also be saved or shared between charts.
 
 mod chart;
 mod draw;
 mod scale;
+mod study;
 
 pub use chart::{Chart, ChartKind, ChartLabels, ChartMessage, PriceScale};
+pub use study::{BarColors, Plot, PlotFill, PlotStyle, Study, StudyPlacement, ValueFormat};

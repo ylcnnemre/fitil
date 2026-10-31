@@ -900,6 +900,7 @@ dependencies = [
  "fitil-chart",
  "fitil-core",
  "fitil-exchange",
+ "fitil-indicators",
  "fitil-market",
  "fitil-store",
  "fluent-bundle",
@@ -955,6 +956,11 @@ dependencies = [
 [[package]]
 name = "fitil-indicators"
 version = "0.1.0"
+dependencies = [
+ "fitil-core",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "fitil-market"
@@ -963,8 +969,11 @@ dependencies = [
  "async-trait",
  "fitil-core",
  "fitil-exchange",
+ "fitil-indicators",
  "fitil-store",
  "futures",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
  "tokio",
 ]

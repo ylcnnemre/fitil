@@ -17,6 +17,7 @@ fitil-binance = { path = "crates/fitil-binance" }
 fitil-chart = { path = "crates/fitil-chart" }
 fitil-core = { path = "crates/fitil-core" }
 fitil-exchange = { path = "crates/fitil-exchange" }
+fitil-indicators = { path = "crates/fitil-indicators" }
 fitil-market = { path = "crates/fitil-market" }
 fitil-store = { path = "crates/fitil-store" }
 fluent-bundle = "0.16"

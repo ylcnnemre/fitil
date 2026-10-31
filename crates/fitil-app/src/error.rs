@@ -15,10 +15,21 @@ pub enum AppError {
     Network,
     /// The exchange rejected a request; the detail is the exchange's own message.
     Exchange(String),
+    /// The candle cache could not be used.
     Storage(String),
+    /// What the user made, such as templates, could not be read or saved.
+    UserData(String),
 }
 
 impl AppError {
+    /// An error from the user's own data rather than from the cache.
+    pub fn user_data(error: MarketError) -> Self {
+        match error {
+            MarketError::Storage(detail) => AppError::UserData(detail),
+            other => other.into(),
+        }
+    }
+
     pub fn message(&self, t: &Translations) -> String {
         match self {
             AppError::RestrictedLocation => t.get("error-restricted"),
@@ -30,6 +41,9 @@ impl AppError {
                 t.get_with("error-exchange", &[("detail", detail.clone())])
             }
             AppError::Storage(detail) => t.get_with("error-storage", &[("detail", detail.clone())]),
+            AppError::UserData(detail) => {
+                t.get_with("error-user-data", &[("detail", detail.clone())])
+            }
         }
     }
 }

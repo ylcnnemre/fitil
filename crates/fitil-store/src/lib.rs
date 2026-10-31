@@ -1,15 +1,22 @@
-//! Local SQLite storage for Fitil: candle cache, drawings, layouts and settings.
+//! Local SQLite storage for Fitil, in two files:
 //!
-//! Callers keep every candle series contiguous: they only add candles right before
-//! the oldest or right after the newest stored one, so a series has no holes.
+//! - [`Store`], the candle cache. It only holds what can be downloaded again, so it may be
+//!   deleted at any time. Callers keep every candle series contiguous: they only add
+//!   candles right before the oldest or right after the newest stored one, so a series
+//!   has no holes.
+//! - [`UserData`], what the user made: indicator templates, and later drawings, layouts
+//!   and settings.
+
+mod user;
+
+pub use user::{StoredTemplate, UserData};
 
 use std::path::Path;
 
 use fitil_core::{Candle, SeriesKey};
 use rusqlite::{Connection, OptionalExtension, params};
 
-/// Schema changes, applied in order. `PRAGMA user_version` records how many have run,
-/// so a cache written by an older Fitil is upgraded in place instead of being lost.
+/// Changes to the cache's schema, applied in order (see [`migrate`]).
 const MIGRATIONS: &[&str] = &[
     // 1: candles and series notes, for Binance only.
     "
@@ -91,7 +98,7 @@ pub enum StoreError {
     Sqlite(#[from] rusqlite::Error),
     #[error("could not create the data folder: {0}")]
     Io(#[from] std::io::Error),
-    #[error("the cache was created by a newer Fitil (schema {found}, this version knows {known})")]
+    #[error("the file was created by a newer Fitil (schema {found}, this version knows {known})")]
     NewerSchema { found: u32, known: u32 },
 }
 
@@ -112,34 +119,14 @@ pub struct Store {
 impl Store {
     /// Opens the cache at `path`, creating it and its folder if needed.
     pub fn open(path: &Path) -> Result<Self> {
-        if let Some(folder) = path.parent() {
-            std::fs::create_dir_all(folder)?;
-        }
-        let conn = Connection::open(path)?;
-        conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
-        Self::migrate(conn)
+        let mut conn = open_file(path)?;
+        migrate(&mut conn, MIGRATIONS)?;
+        Ok(Self { conn })
     }
 
     pub fn open_in_memory() -> Result<Self> {
-        Self::migrate(Connection::open_in_memory()?)
-    }
-
-    fn migrate(mut conn: Connection) -> Result<Self> {
-        let applied: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        let known = MIGRATIONS.len() as u32;
-        if applied > known {
-            return Err(StoreError::NewerSchema {
-                found: applied,
-                known,
-            });
-        }
-        let tx = conn.transaction()?;
-        for migration in &MIGRATIONS[applied as usize..] {
-            tx.execute_batch(migration)?;
-        }
-        tx.pragma_update(None, "user_version", known)?;
-        tx.commit()?;
+        let mut conn = Connection::open_in_memory()?;
+        migrate(&mut conn, MIGRATIONS)?;
         Ok(Self { conn })
     }
 
@@ -271,6 +258,37 @@ impl Store {
     }
 }
 
+/// Opens the database at `path`, creating it and its folder if needed.
+fn open_file(path: &Path) -> Result<Connection> {
+    if let Some(folder) = path.parent() {
+        std::fs::create_dir_all(folder)?;
+    }
+    let conn = Connection::open(path)?;
+    conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    Ok(conn)
+}
+
+/// Runs the `migrations` not applied yet. `PRAGMA user_version` records how many have
+/// run, so a file written by an older Fitil is upgraded in place instead of being lost.
+fn migrate(conn: &mut Connection, migrations: &[&str]) -> Result<()> {
+    let applied: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let known = migrations.len() as u32;
+    if applied > known {
+        return Err(StoreError::NewerSchema {
+            found: applied,
+            known,
+        });
+    }
+    let tx = conn.transaction()?;
+    for migration in &migrations[applied as usize..] {
+        tx.execute_batch(migration)?;
+    }
+    tx.pragma_update(None, "user_version", known)?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// Exchange, market, symbol and timeframe of a series, as stored.
 fn columns(key: &SeriesKey) -> [String; 4] {
     [
@@ -330,10 +348,10 @@ mod tests {
     }
 
     /// A database file in the temp folder, removed when dropped.
-    struct TempDb(PathBuf);
+    pub(crate) struct TempDb(pub(crate) PathBuf);
 
     impl TempDb {
-        fn new(name: &str) -> Self {
+        pub(crate) fn new(name: &str) -> Self {
             let path = std::env::temp_dir()
                 .join(format!("fitil-store-{}-{name}", std::process::id()))
                 .join("cache.sqlite");

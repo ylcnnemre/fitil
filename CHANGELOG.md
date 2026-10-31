@@ -30,6 +30,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   opens a chart at start.
 - An exchange picker in the top bar, ready for more exchanges.
 - `FITIL_DATA_DIR` moves the data folder (for tests and portable use).
+- Indicators (`fitil-indicators`), with no limit on how many a chart shows:
+  - SMA, EMA, WMA, VWMA, Bollinger Bands, Keltner and Donchian channels, SuperTrend,
+    Parabolic SAR, ADX/DMI, Ichimoku Cloud, RSI, MACD, Stochastic, Stochastic RSI, CCI,
+    ATR, Volume, Buy/Sell Volume, CVD, OBV and anchored VWAP;
+  - checked against published reference values, and computed incrementally: a live
+    update recomputes only the newest candle;
+  - buy/sell volume and CVD are offered only on exchanges that report taker volume.
+- Indicator panes under the price chart, resized by dragging their edges, with their own
+  scales, guide lines (such as RSI's 70 and 30) and legends; a crosshair across all panes.
+- Indicators over the price are kept in view when the price range is fitted, and can
+  shade the area between two lines (Bollinger Bands, the Ichimoku cloud).
+- An indicator list with search, and a settings window for each indicator: parameters,
+  source, and each line's color, width and visibility.
+- Indicator templates: the chart's indicators saved under a name and applied to another
+  chart in one click. They live in a separate `user.sqlite`, so clearing the candle cache
+  keeps them.
+- A button that shows or hides the volume bars under the candles.
 
 ### Changed
 
@@ -43,3 +60,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Candles' quote volume, trade count and taker volume are optional, since not every
   exchange reports them.
 - The candle cache keys include the exchange. Existing caches are upgraded in place.
+
+### Fixed
+
+- Axis labels no longer show through the crosshair's and the last price's boxes.

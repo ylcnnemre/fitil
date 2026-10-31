@@ -17,6 +17,7 @@ fitil-binance.workspace = true
 fitil-chart.workspace = true
 fitil-core.workspace = true
 fitil-exchange.workspace = true
+fitil-indicators.workspace = true
 fitil-market.workspace = true
 fitil-store.workspace = true
 fluent-bundle.workspace = true

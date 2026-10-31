@@ -211,10 +211,10 @@ Proje, her biri tek bir işi yapan parçalara (crate) bölünür. Hedef üç şe
 | `fitil-core` | Alan modeli: mum, sembol, piyasa, borsa kimliği, zaman dilimi, mum birleştirme. | — (hiçbiri) |
 | `fitil-exchange` | Borsa arayüzü (`Exchange`): her borsanın uyduğu sözleşme. Ortak araçlar: WebSocket bağlantı motoru, istek limiti, hata tipleri. | core |
 | `fitil-binance` ve ileride diğer borsalar | Bir borsanın adaptörü: arayüzü o borsanın API'siyle uygular. | core, exchange |
-| `fitil-store` | Yerel veritabanı: mum önbelleği, ileride çizimler, düzenler ve ayarlar. Sürüm numaralı göçlerle (migration) çalışır. | core |
-| `fitil-indicators` | İndikatör hesapları. Saf hesap: mumlar girer, seriler çıkar. | core |
-| `fitil-market` | Uygulama katmanı:<br>• seriyi yükleme (önce önbellek, eksikler borsadan),<br>• boşluk doldurma, eski mum yükleme,<br>• canlı mumu işleme,<br>• izleme listesi.<br>Ekranı ve interneti tanımaz, borsayı sadece arayüzü üzerinden kullanır. | core, exchange (yalnızca arayüz), store |
-| `fitil-chart` | Grafik bileşeni. | core, iced |
+| `fitil-store` | Yerel veritabanı, iki dosya:<br>• mum önbelleği (her an silinebilir, yeniden indirilir),<br>• kullanıcının kendi verisi: indikatör şablonları, ileride çizimler, düzenler ve ayarlar.<br>Sürüm numaralı göçlerle (migration) çalışır. | core |
+| `fitil-indicators` | İndikatör hesapları ve listesi (katalog). Saf hesap: mumlar girer, seriler çıkar. | core |
+| `fitil-market` | Uygulama katmanı:<br>• seriyi yükleme (önce önbellek, eksikler borsadan),<br>• boşluk doldurma, eski mum yükleme,<br>• canlı mumu işleme,<br>• izleme listesi,<br>• grafikteki indikatörler ve şablonlar.<br>Ekranı ve interneti tanımaz, borsayı sadece arayüzü üzerinden kullanır. | core, exchange (yalnızca arayüz), store, indicators |
+| `fitil-chart` | Grafik bileşeni: mumlar, indikatör çizgileri ve alt paneller. Hesap yapmaz, kendisine verilen değerleri çizer. | core, iced |
 | `fitil-app` | Pencere ve ekranlar. Borsa adaptörlerini kaydeder, katmanları birbirine bağlar. | hepsi |
 
 **Kurallar:**
@@ -326,12 +326,16 @@ fitil/
 
 ### 6.6 Verilerin saklandığı yer
 
-Her işletim sisteminin standart uygulama klasörü kullanılır:
+Her işletim sisteminin standart uygulama klasörü kullanılır. İki dosya vardır:
+- `user.sqlite`: kullanıcının kendi verisi (indikatör şablonları, ileride ayarlar, çizimler ve düzenler).
+- `cache.sqlite`: mum önbelleği. Silinirse sadece mumlar yeniden indirilir, kullanıcının verisi kaybolmaz.
+
+Klasörler:
 - **Windows:**
-  - Ayarlar, çizimler ve düzenler: `%APPDATA%\Fitil`.
-  - Mum önbelleği (`cache.sqlite`): `%LOCALAPPDATA%\Fitil`. Büyüyebilen önbellek, şirket ağlarındaki dolaşan profillerle başka bilgisayarlara kopyalanmasın diye burada durur.
-- **macOS:** `~/Library/Application Support/Fitil`
-- **Linux:** `~/.local/share/fitil`
+  - `user.sqlite`: `%APPDATA%\Fitil`.
+  - `cache.sqlite`: `%LOCALAPPDATA%\Fitil`. Büyüyebilen önbellek, şirket ağlarındaki dolaşan profillerle başka bilgisayarlara kopyalanmasın diye burada durur.
+- **macOS:** ikisi de `~/Library/Application Support/Fitil`
+- **Linux:** ikisi de `~/.local/share/fitil`
 
 `FITIL_DATA_DIR` ortam değişkeni bu klasörü değiştirir. Testlerde ve ileride kurulumsuz (taşınabilir) kullanımda işe yarar.
 

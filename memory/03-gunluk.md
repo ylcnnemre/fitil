@@ -243,3 +243,49 @@ Bu denemeleri proje sahibi uygulamayı kullanırken yaptı.
 **Bilinen küçük sorun:** Önbellek yolu çok uzunsa durum çubuğu iki satıra bölünüyor. Sadece test klasöründe görüldü.
 
 **Diğer borsalar için araştırma:** OKX, Hyperliquid, HTX ve Bybit API'leri arka planda araştırıldı. Sonuçlar `04-teknik-notlar.md` dosyasında "Diğer borsalar" başlığında.
+
+### Adım 4: İndikatörler ve paneller (kodlandı, proje sahibinin denemesi bekleniyor)
+
+Proje sahibi "Evet, başla" dedi. Oturum uzun sürdüğü için arada bir kez özetlendi (context sıkıştırma). İş kaldığı yerden devam etti.
+
+**Yapılanlar:**
+1. **`fitil-indicators`:**
+   - `primitives.rs`: ortak yapı taşları: `Window`, `Sma`, `Ema` (normal ve Wilder/RMA, ikisi de SMA ile başlar), `Wma`, `Deviation` (popülasyon), `MeanDeviation`, `Extremes`, `TrueRange`, `Atr`, `Change`. NaN girdiyi atlar.
+   - `indicators/`: 22 indikatör, TradingView'ın tanımlarıyla (SuperTrend, SAR, DMI, Keltner gibi).
+   - `catalog.rs`: her indikatörün kimliği, grubu, yeri (fiyatın üstü ya da panel), parametreleri, çıktıları, dolgu (iki çizgi arası), seviye çizgileri, sabit aralık, sayı biçimi, alıcı hacmi gerekip gerekmediği.
+   - `settings.rs`: kaydedilebilir ayarlar (JSON), bozuk/eski ayarları onaran `normalized()`.
+   - `calculation.rs`: artımlı hesap. En yeni mum hep bir kopya üzerinde hesaplanır, önceki mumlar "kesinleşmiş" sayılır. İlk mum ya da son kesinleşmiş mumun kendisi değişirse baştan hesaplanır.
+   - Testler: StockCharts'ın RSI(14) ve EMA(10) örnek tabloları (4 ondalıklı fiyatlarla), her indikatör için "canlı güncelleme = baştan hesap" eşitliği.
+2. **`fitil-store`:** `UserData` (`user.sqlite`), göç 1: `indicator_templates` tablosu. Göç kodu önbellekle ortak (`migrate`).
+3. **`fitil-market`:**
+   - `studies.rs`: `Studies` (ekle, kaldır, ayar değiştir, gizle, güncelle). Aynı tür ikinci bir ortalama paletten boş bir renk alır. Gizli indikatör hesaplanmaz, gösterilince yetişir.
+   - `templates.rs`: şablon kaydet/oku/sil. Biçim `{"version":1,"studies":[…]}`. Okunamayan tek indikatör diğerlerini bozmaz.
+   - Alıcı hacmi bildirmeyen borsada Alış/Satış Hacmi ve CVD listede çıkmaz, şablondan da eklenmez (`is_available`).
+4. **`fitil-chart`:**
+   - `study.rs`: grafiğin kendi indikatör modeli (`Study`, `Plot`, `PlotFill`). Grafik hesap yapmaz, `fitil-indicators`'a bağımlı değildir.
+   - Alt paneller: yükseklikler ağırlıkla tutulur (fiyat 3, her panel 1). Kenar sürüklenince ağırlık aktarılır, panel 30 pikselden küçülmez. Ağırlıklar indikatör kimliğiyle saklanır.
+   - Çizim: çizgi (NaN'da kopar), histogram (sabit, işarete göre, muma göre renk), nokta (SAR), iki çizgi arası dolgu (kesişince renk değişir: Ichimoku bulutu), kaydırılmış çizgiler (Ichimoku), seviye çizgileri.
+   - Fiyatın üstündeki indikatörler otomatik ölçeğe dahil.
+   - Lejant: her indikatör bir satır, değerler kendi renginde, arkasında yarı saydam zemin.
+   - Artı imleci tüm panellerden geçer. Kutu, imlecin bulunduğu panelin ekseninde çıkar.
+   - `replace_series`: sembol değişince grafik nesnesi kalır, yakınlaştırma ve panel yükseklikleri korunur.
+5. **`fitil-app`:**
+   - `studies.rs`: uygulama katmanı → grafik modeli dönüşümü, etiketler ("RSI 14", "BB 20 2"), sayı okuma (virgül de olur), arama.
+   - `dialogs.rs`: karartılmış arka planlı pencere (`stack!` + `opaque` + `mouse_area`), İndikatörler penceresi (gruplu liste, arama, grafikteki adet, şablonlar), ayar penceresi (girdiler, renk kutuları, kalınlık, göster).
+   - Esc pencereyi kapatır (`keyboard::listen`). İndikatörler penceresi açılınca arama kutusuna odaklanır.
+   - Şablon silme iki tıklama ister ("Emin misin?").
+   - Yeni çeviri anahtarları (TR/EN). Her katalog kimliğinin çevirisinin olduğunu bir test denetler.
+6. **Belgeler:** `docs/TASARIM.md` §6 tablosu (store, market, chart) ve §6.6 (`user.sqlite` + `cache.sqlite`), `CHANGELOG.md`.
+
+**Ekran denetiminde bulunanlar ve düzeltilenler:**
+- **Lejant okunmuyordu:** MACD'nin mavi çizgisi "-102.43" yazısının eksisini örtüyordu. Lejant satırlarına yarı saydam zemin eklendi.
+- **Panel ekseninde sayı yoktu:** RSI panelinde iki çizgi aralığı kenarlara düşüyordu. Çizgi sıklığı artırıldı, seviye değerleri (70/50/30) de eksene yazılıyor.
+- **Eksen yazıları kutuların içinden görünüyordu** (önceki adımlardan kalma hata): iced bir katmandaki bütün yazıları şekillerden sonra çiziyor. Eksen yazıları her karede çizilen katmana taşındı, kutuların altında kalanlar atlanıyor.
+- **Liste sayıları kaydırma çubuğunun altında kalıyordu:** kaydırma çubuğu içeriğin yanına alındı (`scrollable(...).spacing(6)`).
+- **Palette olmayan varsayılan renk** (Histogram'ın yeşil-turkuazı) seçili görünmüyordu: palette yoksa ilk kutu olarak eklendi.
+
+**Ekranda doğrulananlar** (BTCUSDT 1h, önbellek kopyasıyla): iki EMA farklı renkte, Bollinger dolgusu, Ichimoku bulutu ve geleceğe uzanan kısmı, RSI/MACD/Hacim panelleri, lejantlar, etiket satırı, İndikatörler penceresi, MACD ayar penceresi. Doğrulama için açılışta indikatör ekleyen geçici satırlar (`TEMP-VERIFY`) kullanıldı ve sonra silindi.
+
+**Not:** Doğrulama sırasında açılan test penceresinde (önbellek kopyası, `scratchpad`) NEARUSDT'nin seçili olduğu ve imlecin grafikte durduğu görüldü. Proje sahibi muhtemelen pencereyi denedi.
+
+**Testler:** 132 test (`fitil-indicators` 30, `fitil-chart` 21, `fitil-market` 21, `fitil-app` 16, `fitil-store` 13, `fitil-core` 13, `fitil-exchange` 9, `fitil-binance` 9) ve 3 canlı test. fmt ve clippy temiz.

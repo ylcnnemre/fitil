@@ -1,8 +1,18 @@
 use std::cell::Cell;
+use std::collections::BTreeMap;
 
 use fitil_core::{Candle, Timeframe};
 use iced::widget::canvas;
 use iced::{Element, Fill};
+
+use crate::study::{Study, StudyPlacement};
+
+/// Shares of the height given to the price pane and to each new indicator pane: one
+/// indicator pane takes a quarter of the chart, two a fifth each.
+const PRICE_PANE_WEIGHT: f64 = 3.0;
+const INDICATOR_PANE_WEIGHT: f64 = 1.0;
+/// Panes are never dragged smaller than this, in pixels.
+const MIN_PANE_HEIGHT: f64 = 30.0;
 
 /// Pixels per bar when a chart opens.
 const DEFAULT_SPACING: f64 = 8.0;
@@ -80,6 +90,9 @@ pub enum ChartMessage {
     ResetPrice,
     /// Shows the newest candles at the default zoom.
     ResetView,
+    /// Moves the edge above indicator pane `index` (0 is the topmost) down by `pixels`,
+    /// or up when negative.
+    MoveDivider { index: usize, pixels: f64 },
 }
 
 /// A candle chart for one series.
@@ -103,9 +116,18 @@ pub struct Chart {
     pub(crate) now: i64,
     pub(crate) loading_older: bool,
     history_complete: bool,
-    /// Plot width and shown price range as of the last draw.
+    /// Indicators, in the order given.
+    pub(crate) studies: Vec<Study>,
+    /// Whether volume bars are drawn under the candles.
+    pub(crate) show_volume: bool,
+    /// Shares of the height of the price pane and of each indicator pane by study id;
+    /// kept for studies that are gone, so a pane shown again keeps its height.
+    price_weight: f64,
+    pane_weights: BTreeMap<u64, f64>,
+    /// Plot width, shown price range and height of all panes as of the last draw.
     pub(crate) plot_width: Cell<f64>,
     pub(crate) shown_range: Cell<Option<(f64, f64)>>,
+    pub(crate) panes_height: Cell<f64>,
     pub(crate) cache: canvas::Cache,
 }
 
@@ -133,8 +155,13 @@ impl Chart {
             now: 0,
             loading_older: false,
             history_complete: false,
+            studies: Vec::new(),
+            show_volume: true,
+            price_weight: PRICE_PANE_WEIGHT,
+            pane_weights: BTreeMap::new(),
             plot_width: Cell::new(800.0),
             shown_range: Cell::new(None),
+            panes_height: Cell::new(600.0),
             cache: canvas::Cache::new(),
         }
     }
@@ -168,6 +195,24 @@ impl Chart {
         self.refresh();
     }
 
+    /// Shows another series. Its candles start out empty and the view follows the newest
+    /// once they arrive; the zoom and the look (chart type, scale, volume bars, pane
+    /// heights) stay.
+    pub fn replace_series(&mut self, title: String, timeframe: Timeframe, decimals: u32) {
+        self.title = title;
+        self.timeframe = timeframe;
+        self.decimals = decimals;
+        self.raw.clear();
+        self.candles.clear();
+        self.studies.clear();
+        self.right = RIGHT_MARGIN;
+        self.price_range = None;
+        self.loading_older = false;
+        self.history_complete = false;
+        self.shown_range.set(None);
+        self.cache.clear();
+    }
+
     pub fn set_kind(&mut self, kind: ChartKind) {
         self.kind = kind;
         self.refresh();
@@ -199,6 +244,67 @@ impl Chart {
 
     pub fn set_history_complete(&mut self, complete: bool) {
         self.history_complete = complete;
+    }
+
+    /// Replaces the indicators. Their values line up with the candles last given to
+    /// [`Chart::set_candles`].
+    pub fn set_studies(&mut self, studies: Vec<Study>) {
+        self.studies = studies;
+        self.cache.clear();
+    }
+
+    pub fn set_show_volume(&mut self, show: bool) {
+        self.show_volume = show;
+        self.cache.clear();
+    }
+
+    pub(crate) fn overlays(&self) -> impl Iterator<Item = &Study> {
+        self.studies
+            .iter()
+            .filter(|study| study.placement == StudyPlacement::Overlay)
+    }
+
+    /// The studies with a pane of their own, top to bottom.
+    pub(crate) fn pane_studies(&self) -> impl Iterator<Item = &Study> {
+        self.studies
+            .iter()
+            .filter(|study| study.placement == StudyPlacement::Pane)
+    }
+
+    /// Shares of the height: the price pane's, then each indicator pane's.
+    pub(crate) fn pane_weights(&self) -> Vec<f64> {
+        std::iter::once(self.price_weight)
+            .chain(self.pane_studies().map(|study| {
+                self.pane_weights
+                    .get(&study.id)
+                    .copied()
+                    .unwrap_or(INDICATOR_PANE_WEIGHT)
+            }))
+            .collect()
+    }
+
+    /// Moves height between indicator pane `index` and the pane above it.
+    fn move_divider(&mut self, index: usize, pixels: f64) {
+        let ids: Vec<u64> = self.pane_studies().map(|study| study.id).collect();
+        let mut weights = self.pane_weights();
+        let (above, below) = (index, index + 1);
+        if below >= weights.len() {
+            return;
+        }
+        let per_weight = self.panes_height.get() / weights.iter().sum::<f64>();
+        let lowest = MIN_PANE_HEIGHT - weights[above] * per_weight;
+        let highest = weights[below] * per_weight - MIN_PANE_HEIGHT;
+        if !per_weight.is_finite() || lowest > highest {
+            return;
+        }
+        let moved = pixels.clamp(lowest, highest) / per_weight;
+        weights[above] += moved;
+        weights[below] -= moved;
+
+        self.price_weight = weights[0];
+        for (id, weight) in ids.into_iter().zip(&weights[1..]) {
+            self.pane_weights.insert(id, *weight);
+        }
     }
 
     /// Whether the view is close enough to the oldest candle that more should be loaded.
@@ -236,6 +342,7 @@ impl Chart {
                 self.spacing = DEFAULT_SPACING;
                 self.right = self.raw.len() as f64 - 1.0 + RIGHT_MARGIN;
             }
+            ChartMessage::MoveDivider { index, pixels } => self.move_divider(index, pixels),
         }
         self.clamp();
         self.cache.clear();
@@ -447,6 +554,82 @@ mod tests {
         assert_eq!(chart.price_range, Some((150.0, 200.0)));
         chart.update(ChartMessage::ResetPrice);
         assert_eq!(chart.price_range, None);
+    }
+
+    fn pane_study(id: u64) -> Study {
+        Study {
+            id,
+            label: format!("P{id}"),
+            placement: StudyPlacement::Pane,
+            plots: Vec::new(),
+            fills: Vec::new(),
+            levels: Vec::new(),
+            range: None,
+            format: crate::ValueFormat::Decimals(2),
+        }
+    }
+
+    fn near(actual: &[f64], expected: &[f64]) -> bool {
+        actual.len() == expected.len()
+            && actual
+                .iter()
+                .zip(expected)
+                .all(|(a, e)| (a - e).abs() < 1e-9)
+    }
+
+    #[test]
+    fn indicator_panes_share_the_height_and_keep_it() {
+        let mut chart = chart();
+        chart.set_studies(vec![pane_study(1), pane_study(2)]);
+        assert_eq!(chart.pane_weights(), [3.0, 1.0, 1.0]);
+
+        // 500 pixels for a total weight of 5: 100 pixels per weight.
+        chart.panes_height.set(500.0);
+        chart.update(ChartMessage::MoveDivider {
+            index: 1,
+            pixels: -40.0,
+        });
+        assert!(near(&chart.pane_weights(), &[3.0, 0.6, 1.4]));
+
+        // The first indicator pane is squeezed no lower than its minimum height.
+        chart.update(ChartMessage::MoveDivider {
+            index: 0,
+            pixels: 1000.0,
+        });
+        assert!(near(&chart.pane_weights(), &[3.3, 0.3, 1.4]));
+        chart.update(ChartMessage::MoveDivider {
+            index: 5,
+            pixels: 10.0,
+        });
+        assert!(near(&chart.pane_weights(), &[3.3, 0.3, 1.4]));
+
+        // A pane shown again keeps its height; a new one gets the default.
+        chart.set_studies(vec![pane_study(2), pane_study(3)]);
+        assert!(near(&chart.pane_weights(), &[3.3, 1.4, 1.0]));
+    }
+
+    #[test]
+    fn another_series_keeps_the_zoom_and_the_panes() {
+        let mut chart = chart();
+        chart.set_candles(candles(0..500));
+        chart.set_studies(vec![pane_study(1)]);
+        chart.panes_height.set(400.0);
+        chart.update(ChartMessage::MoveDivider {
+            index: 0,
+            pixels: -50.0,
+        });
+        chart.update(ChartMessage::Zoom {
+            factor: 2.0,
+            anchor: 0.0,
+        });
+
+        chart.replace_series("OTHER".into(), "4h".parse().unwrap(), 4);
+        assert!(chart.candles.is_empty() && chart.studies.is_empty());
+        assert_eq!(chart.spacing, 16.0);
+        chart.set_candles(candles(0..100));
+        assert_eq!(chart.right, 99.0 + RIGHT_MARGIN);
+        chart.set_studies(vec![pane_study(1)]);
+        assert!(near(&chart.pane_weights(), &[2.5, 1.5]));
     }
 
     #[test]

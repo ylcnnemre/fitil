@@ -1,13 +1,17 @@
-//! Fitil's application layer: loading candle series, live updates and the watchlist.
+//! Fitil's application layer: candle series, live updates, the watchlist and the
+//! indicators on a chart.
 //!
 //! Decisions live here, not in the user interface: what to read from the cache and what
-//! to download, how to fill gaps, what to do with a live candle, how to rank symbols.
-//! This crate talks to exchanges only through `fitil_exchange::Exchange` and never
-//! touches a screen, so all of it is tested with a fake exchange and no network.
+//! to download, how to fill gaps, what to do with a live candle, how to rank symbols,
+//! which indicators an exchange can feed. This crate talks to exchanges only through
+//! `fitil_exchange::Exchange` and never touches a screen, so all of it is tested with a
+//! fake exchange and no network.
 
 mod board;
 mod loader;
 mod series;
+mod studies;
+mod templates;
 
 #[cfg(test)]
 mod fake;
@@ -15,6 +19,10 @@ mod fake;
 pub use board::{Board, MarketSnapshot, load_market};
 pub use loader::{Loaded, SharedStore, load_older, open_series, save_candle};
 pub use series::{LiveUpdate, Series};
+pub use studies::{Studies, Study, StudyId, is_available};
+pub use templates::{
+    SharedUserData, TEMPLATE_NAME_MAX, Template, delete_template, load_templates, save_template,
+};
 
 use fitil_exchange::ExchangeError;
 use fitil_store::StoreError;
@@ -24,7 +32,7 @@ use fitil_store::StoreError;
 pub enum MarketError {
     #[error(transparent)]
     Exchange(#[from] ExchangeError),
-    #[error("local cache: {0}")]
+    #[error("local storage: {0}")]
     Storage(String),
 }
 

@@ -3,14 +3,18 @@
 
 use fitil_chart::{ChartKind, PriceScale};
 use fitil_core::{ExchangeId, Timeframe};
+use fitil_market::Study;
 use iced::alignment::Horizontal;
 use iced::widget::{
     Column, button, column, container, pick_list, row, rule, scrollable, space, text, text_input,
+    tooltip,
 };
 use iced::{Element, Fill, Length};
 
-use crate::i18n::Language;
-use crate::{Connection, Fitil, Load, Message, TIMEFRAME_CHOICES, format, market_key, storage};
+use crate::i18n::{Language, Translations};
+use crate::{
+    Connection, Fitil, Load, Message, TIMEFRAME_CHOICES, format, market_key, storage, studies,
+};
 
 /// Rows shown in the watchlist; the rest are reachable by searching.
 const WATCHLIST_ROWS: usize = 100;
@@ -40,9 +44,9 @@ pub fn view(app: &Fitil) -> Element<'_, Message> {
 
 /// An item of a picker: a value shown with a translated or proper name.
 #[derive(Debug, Clone, PartialEq)]
-struct Choice<T> {
-    value: T,
-    name: String,
+pub struct Choice<T> {
+    pub value: T,
+    pub name: String,
 }
 
 impl<T> std::fmt::Display for Choice<T> {
@@ -277,6 +281,11 @@ fn details(app: &Fitil) -> Element<'_, Message> {
         info.push_str(&t.get("detail-complete"));
     }
 
+    let volume_style = if app.show_volume {
+        button::primary
+    } else {
+        button::secondary
+    };
     let toolbar = row![
         pick_list(
             timeframes,
@@ -290,6 +299,10 @@ fn details(app: &Fitil) -> Element<'_, Message> {
         .width(150),
         scale_button(PriceScale::Logarithmic, "scale-log"),
         scale_button(PriceScale::Percent, "scale-percent"),
+        button(text(t.get("chart-indicators")).size(14)).on_press(Message::OpenIndicators),
+        button(text(t.get("chart-volume-toggle")).size(14))
+            .style(volume_style)
+            .on_press(Message::VolumeToggled),
         space().width(Fill),
         text(info).size(13).style(text::secondary),
     ]
@@ -297,6 +310,13 @@ fn details(app: &Fitil) -> Element<'_, Message> {
     .align_y(iced::Center);
 
     let mut content = column![toolbar].spacing(8);
+    if !app.studies.is_empty() {
+        content = content.push(
+            row(app.studies.iter().map(|study| chip(study, t)))
+                .spacing(6)
+                .wrap(),
+        );
+    }
     if let Some(error) = &selection.error {
         content = content.push(text(error.message(t)).style(text::danger));
     }
@@ -311,6 +331,62 @@ fn details(app: &Fitil) -> Element<'_, Message> {
         .push(chart)
         .push(text(t.get("chart-hint")).size(12).style(text::secondary))
         .into()
+}
+
+/// An indicator on the chart: its label opens its settings, then buttons to hide and
+/// remove it.
+fn chip<'a>(study: &'a Study, t: &Translations) -> Element<'a, Message> {
+    let id = study.id();
+    let settings = study.settings();
+    let visible = settings.visible;
+    let label_style = if visible {
+        text::default
+    } else {
+        text::secondary
+    };
+    let small = |content: &'static str, message: Message, hint: String| {
+        tooltip(
+            button(text(content).size(13))
+                .style(button::text)
+                .padding([2, 6])
+                .on_press(message),
+            container(text(hint).size(12))
+                .padding(6)
+                .style(container::rounded_box),
+            tooltip::Position::Bottom,
+        )
+    };
+    let swatch = text("■")
+        .size(13)
+        .color(studies::color(settings.outputs[0].color));
+    let name = button(
+        row![
+            swatch,
+            text(studies::label(settings, t))
+                .size(13)
+                .style(label_style)
+        ]
+        .spacing(6)
+        .align_y(iced::Center),
+    )
+    .style(button::text)
+    .padding([2, 6])
+    .on_press(Message::OpenStudySettings(id));
+    let (symbol, hint) = if visible {
+        ("●", t.get("study-hide"))
+    } else {
+        ("○", t.get("study-show"))
+    };
+    container(
+        row![
+            name,
+            small(symbol, Message::ToggleStudy(id), hint),
+            small("×", Message::RemoveStudy(id), t.get("study-remove")),
+        ]
+        .align_y(iced::Center),
+    )
+    .style(container::bordered_box)
+    .into()
 }
 
 fn status_bar(app: &Fitil) -> Element<'_, Message> {
