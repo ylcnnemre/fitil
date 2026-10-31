@@ -1,6 +1,7 @@
 //! Errors shown to the user, in a form that can be cloned into UI messages.
 
 use fitil_exchange::ExchangeError;
+use fitil_market::MarketError;
 use fitil_store::StoreError;
 
 use crate::i18n::Translations;
@@ -33,16 +34,23 @@ impl AppError {
     }
 }
 
-impl From<ExchangeError> for AppError {
-    fn from(error: ExchangeError) -> Self {
+impl From<MarketError> for AppError {
+    fn from(error: MarketError) -> Self {
         match error {
-            ExchangeError::RestrictedLocation => AppError::RestrictedLocation,
-            ExchangeError::RateLimited { retry_after } => AppError::RateLimited {
-                seconds: retry_after.as_secs(),
-            },
-            ExchangeError::Network(_) => AppError::Network,
-            ExchangeError::Api { message, .. } => AppError::Exchange(message),
-            ExchangeError::Parse(detail) => AppError::Exchange(detail),
+            MarketError::Exchange(ExchangeError::RestrictedLocation) => {
+                AppError::RestrictedLocation
+            }
+            MarketError::Exchange(ExchangeError::RateLimited { retry_after }) => {
+                AppError::RateLimited {
+                    seconds: retry_after.as_secs(),
+                }
+            }
+            MarketError::Exchange(ExchangeError::Network(_)) => AppError::Network,
+            MarketError::Exchange(ExchangeError::Api { message, .. }) => {
+                AppError::Exchange(message)
+            }
+            MarketError::Exchange(ExchangeError::Parse(detail)) => AppError::Exchange(detail),
+            MarketError::Storage(detail) => AppError::Storage(detail),
         }
     }
 }

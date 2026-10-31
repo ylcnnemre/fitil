@@ -1,17 +1,19 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-const MINUTE: i64 = 60_000;
+use crate::RequestUsage;
 
 /// Share of the exchange's limit Fitil allows itself, leaving room for other apps on the same IP.
 const BUDGET: f64 = 0.8;
 
-/// Spaces out requests so the request weight stays under the exchange's per-minute limit.
+/// Spaces out requests so their cost stays under an exchange's limit per time window
+/// (Binance: request weight per minute; others count requests per few seconds).
 ///
-/// The exchange reports the weight used so far in each response; that number, not a
-/// local estimate, drives the waiting. Times are Unix milliseconds on the exchange's clock.
+/// When the exchange reports the cost used so far, that number drives the waiting.
+/// Times are Unix milliseconds on the exchange's clock.
 #[derive(Debug)]
 pub struct RateLimiter {
+    window: i64,
     state: Mutex<State>,
 }
 
@@ -19,17 +21,19 @@ pub struct RateLimiter {
 struct State {
     limit: u32,
     used: u32,
-    minute: i64,
+    /// Index of the window `used` belongs to.
+    window: i64,
     blocked_until: i64,
 }
 
 impl RateLimiter {
-    pub fn new(limit: u32) -> Self {
+    pub fn new(limit: u32, window: Duration) -> Self {
         Self {
+            window: window.as_millis().max(1) as i64,
             state: Mutex::new(State {
                 limit,
                 used: 0,
-                minute: 0,
+                window: 0,
                 blocked_until: 0,
             }),
         }
@@ -39,31 +43,42 @@ impl RateLimiter {
         self.lock().limit = limit;
     }
 
-    /// Weight used in the current minute, and the limit.
-    pub fn usage(&self, now: i64) -> (u32, u32) {
+    /// Cost used in the window containing `now`, and the limit.
+    pub fn usage(&self, now: i64) -> RequestUsage {
         let state = self.lock();
-        (state.used_at(now), state.limit)
+        RequestUsage {
+            used: self.used_at(&state, now),
+            limit: state.limit,
+        }
     }
 
-    /// How long to wait before sending a request of `weight` at `now`.
-    pub fn delay(&self, now: i64, weight: u32) -> Duration {
+    /// How long to wait before sending a request costing `cost` at `now`.
+    pub fn delay(&self, now: i64, cost: u32) -> Duration {
         let state = self.lock();
         if now < state.blocked_until {
             return millis(state.blocked_until - now);
         }
         let budget = f64::from(state.limit) * BUDGET;
-        if f64::from(state.used_at(now) + weight) > budget {
-            millis(now.div_euclid(MINUTE) * MINUTE + MINUTE - now)
+        if f64::from(self.used_at(&state, now) + cost) > budget {
+            millis(now.div_euclid(self.window) * self.window + self.window - now)
         } else {
             Duration::ZERO
         }
     }
 
-    /// Records the weight the exchange says has been used in the minute containing `now`.
+    /// Records the cost the exchange says has been used in the window containing `now`.
     pub fn record(&self, now: i64, used: u32) {
         let mut state = self.lock();
-        state.minute = now.div_euclid(MINUTE);
+        state.window = now.div_euclid(self.window);
         state.used = used;
+    }
+
+    /// Adds `cost` to the window containing `now`, for exchanges that do not report usage.
+    pub fn spend(&self, now: i64, cost: u32) {
+        let mut state = self.lock();
+        let used = self.used_at(&state, now);
+        state.window = now.div_euclid(self.window);
+        state.used = used + cost;
     }
 
     /// Holds back every request until `until`, after the exchange asked us to slow down.
@@ -72,20 +87,18 @@ impl RateLimiter {
         state.blocked_until = state.blocked_until.max(until);
     }
 
+    fn used_at(&self, state: &State, now: i64) -> u32 {
+        if now.div_euclid(self.window) == state.window {
+            state.used
+        } else {
+            0
+        }
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.state
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-}
-
-impl State {
-    fn used_at(&self, now: i64) -> u32 {
-        if now.div_euclid(MINUTE) == self.minute {
-            self.used
-        } else {
-            0
-        }
     }
 }
 
@@ -98,33 +111,49 @@ mod tests {
     use super::*;
 
     const T: i64 = 1_793_390_400_000; // the start of a minute
+    const MINUTE: Duration = Duration::from_secs(60);
 
-    #[test]
-    fn requests_go_out_while_under_budget() {
-        let limiter = RateLimiter::new(1000);
-        limiter.record(T + 1_000, 700);
-        assert_eq!(limiter.delay(T + 2_000, 50), Duration::ZERO);
-        assert_eq!(limiter.usage(T + 2_000), (700, 1000));
+    fn usage(used: u32, limit: u32) -> RequestUsage {
+        RequestUsage { used, limit }
     }
 
     #[test]
-    fn waits_for_the_next_minute_when_over_budget() {
-        let limiter = RateLimiter::new(1000);
+    fn requests_go_out_while_under_budget() {
+        let limiter = RateLimiter::new(1000, MINUTE);
+        limiter.record(T + 1_000, 700);
+        assert_eq!(limiter.delay(T + 2_000, 50), Duration::ZERO);
+        assert_eq!(limiter.usage(T + 2_000), usage(700, 1000));
+    }
+
+    #[test]
+    fn waits_for_the_next_window_when_over_budget() {
+        let limiter = RateLimiter::new(1000, MINUTE);
         limiter.record(T + 1_000, 790);
         assert_eq!(limiter.delay(T + 45_000, 20), Duration::from_secs(15));
     }
 
     #[test]
-    fn usage_resets_every_minute() {
-        let limiter = RateLimiter::new(1000);
+    fn usage_resets_every_window() {
+        let limiter = RateLimiter::new(1000, MINUTE);
         limiter.record(T + 1_000, 999);
-        assert_eq!(limiter.usage(T + 61_000), (0, 1000));
+        assert_eq!(limiter.usage(T + 61_000), usage(0, 1000));
         assert_eq!(limiter.delay(T + 61_000, 20), Duration::ZERO);
     }
 
     #[test]
+    fn counts_locally_when_the_exchange_does_not_report() {
+        let limiter = RateLimiter::new(20, Duration::from_secs(2));
+        for _ in 0..16 {
+            limiter.spend(T + 500, 1);
+        }
+        assert_eq!(limiter.usage(T + 500), usage(16, 20));
+        assert_eq!(limiter.delay(T + 500, 1), Duration::from_millis(1_500));
+        assert_eq!(limiter.delay(T + 2_000, 1), Duration::ZERO);
+    }
+
+    #[test]
     fn honours_a_block_from_the_exchange() {
-        let limiter = RateLimiter::new(1000);
+        let limiter = RateLimiter::new(1000, MINUTE);
         limiter.block_until(T + 30_000);
         limiter.block_until(T + 10_000);
         assert_eq!(limiter.delay(T, 1), Duration::from_secs(30));

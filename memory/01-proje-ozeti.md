@@ -39,6 +39,8 @@ Tüm kararlar 30 Ekim 2026'da, ilk oturumda verildi.
 | 12 | Telemetri yok | Fitil kullanıcı hakkında veri göndermez. Sadece borsaya ve sürüm kontrolü için GitHub'a bağlanır. |
 | 13 | GitHub deposu `ylcnnemre/fitil`, herkese açık | Proje sahibinin GitHub hesabı `ylcnnemre`. Bu bilgisayarda `gh` ile oturum açık. |
 | 14 | Dışarıdan gelen katkıları Claude inceleyip Türkçe özetler, birleştirme kararı proje sahibinde | Proje sahibi Rust bilmediği için. Kripto projelerinde kötü niyetli katkı riski var. |
+| 15 | Mimari: "port ve adaptör" (hexagonal), çok borsalı ve modüler (31 Ekim 2026) | Proje sahibi sordu: "Mimariyi pek konuşmadık, temiz bir mimari daha iyi olur. Hyperliquid, OKX, Huobi gibi borsalar ve farklı modüller gelebilir, hepsini düşünerek hareket edelim." Kurallar `docs/TASARIM.md` §6'da. Her borsa ayrı bir adaptör crate'idir ve ortak `Exchange` arayüzünü uygular. İş mantığı `fitil-market`'te, arayüzsüz test edilir. |
+| 16 | Eklenecek borsalar: OKX, Hyperliquid, HTX (Huobi), Bybit, BtcTurk | Faz 2. Her biri §6.3'teki adımlarla eklenir. |
 
 ## Fazlar (özet)
 

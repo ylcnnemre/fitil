@@ -1,6 +1,9 @@
 use crate::Timeframe;
 
 /// One OHLCV candle.
+///
+/// Every exchange provides prices and base volume; the optional fields are only filled
+/// in by exchanges that report them.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Candle {
     /// Unix milliseconds (UTC) when the candle opened.
@@ -9,14 +12,14 @@ pub struct Candle {
     pub high: f64,
     pub low: f64,
     pub close: f64,
-    /// Traded amount in the base asset (BTC in BTCUSDT).
+    /// Traded amount in the base asset (BTC in BTCUSDT), also for futures.
     pub volume: f64,
     /// Traded amount in the quote asset (USDT in BTCUSDT).
-    pub quote_volume: f64,
-    pub trades: u64,
+    pub quote_volume: Option<f64>,
+    pub trades: Option<u64>,
     /// Base-asset volume bought by market (taker) buyers. The rest of `volume` was sold
     /// by takers; this is what buy/sell volume and CVD are computed from.
-    pub taker_buy_volume: f64,
+    pub taker_buy_volume: Option<f64>,
 }
 
 impl Candle {
@@ -26,9 +29,13 @@ impl Candle {
         self.low = self.low.min(next.low);
         self.close = next.close;
         self.volume += next.volume;
-        self.quote_volume += next.quote_volume;
-        self.trades += next.trades;
-        self.taker_buy_volume += next.taker_buy_volume;
+        // A sum is only known if every part is.
+        self.quote_volume = self.quote_volume.zip(next.quote_volume).map(|(a, b)| a + b);
+        self.trades = self.trades.zip(next.trades).map(|(a, b)| a + b);
+        self.taker_buy_volume = self
+            .taker_buy_volume
+            .zip(next.taker_buy_volume)
+            .map(|(a, b)| a + b);
     }
 }
 
@@ -72,8 +79,18 @@ mod tests {
         let merged = aggregate_whole(&minutes, "3m".parse().unwrap());
         let starts: Vec<i64> = merged.iter().map(|c| c.open_time / 60_000).collect();
         assert_eq!(starts, [3, 6]);
-        assert_eq!(merged[0].trades, 6);
-        assert_eq!(merged[1].trades, 4); // still open: minutes 6 and 7
+        assert_eq!(merged[0].trades, Some(6));
+        assert_eq!(merged[1].trades, Some(4)); // still open: minutes 6 and 7
+    }
+
+    #[test]
+    fn unknown_fields_stay_unknown_when_merged() {
+        let mut minutes: Vec<Candle> = (0..3).map(|m| candle(m, 1.0, 2.0, 0.5, 1.5)).collect();
+        minutes[1].taker_buy_volume = None;
+        let merged = aggregate(&minutes, "3m".parse().unwrap());
+        assert_eq!(merged[0].taker_buy_volume, None);
+        assert_eq!(merged[0].trades, Some(6));
+        assert_eq!(merged[0].volume, 3.0);
     }
 
     fn candle(minute: i64, open: f64, high: f64, low: f64, close: f64) -> Candle {
@@ -84,9 +101,9 @@ mod tests {
             low,
             close,
             volume: 1.0,
-            quote_volume: close,
-            trades: 2,
-            taker_buy_volume: 0.25,
+            quote_volume: Some(close),
+            trades: Some(2),
+            taker_buy_volume: Some(0.25),
         }
     }
 
@@ -108,9 +125,9 @@ mod tests {
             (10.0, 15.0, 8.0, 9.0)
         );
         assert_eq!(first.volume, 3.0);
-        assert_eq!(first.quote_volume, 34.0);
-        assert_eq!(first.trades, 6);
-        assert_eq!(first.taker_buy_volume, 0.75);
+        assert_eq!(first.quote_volume, Some(34.0));
+        assert_eq!(first.trades, Some(6));
+        assert_eq!(first.taker_buy_volume, Some(0.75));
         assert_eq!(
             merged[1],
             Candle {

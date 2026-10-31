@@ -1,0 +1,19 @@
+[package]
+name = "fitil-market"
+description = "Fitil's application layer: loading candle series, live updates and the watchlist."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+fitil-core.workspace = true
+fitil-exchange.workspace = true
+fitil-store.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+async-trait.workspace = true
+futures.workspace = true

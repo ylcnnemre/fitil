@@ -1,10 +1,8 @@
-//! What the window shows: a watchlist on the left, the selected symbol on the right
-//! and a status bar at the bottom.
-
-use std::collections::HashMap;
+//! What the window shows: a watchlist on the left, the selected symbol's chart on the
+//! right and a status bar at the bottom.
 
 use fitil_chart::{ChartKind, PriceScale};
-use fitil_core::{Market, Ticker, Timeframe};
+use fitil_core::{ExchangeId, Timeframe};
 use iced::alignment::Horizontal;
 use iced::widget::{
     Column, button, column, container, pick_list, row, rule, scrollable, space, text, text_input,
@@ -12,7 +10,7 @@ use iced::widget::{
 use iced::{Element, Fill, Length};
 
 use crate::i18n::Language;
-use crate::{Connection, Fitil, Load, Message, TIMEFRAME_CHOICES, data, format};
+use crate::{Connection, Fitil, Load, Message, TIMEFRAME_CHOICES, format, market_key, storage};
 
 /// Rows shown in the watchlist; the rest are reachable by searching.
 const WATCHLIST_ROWS: usize = 100;
@@ -40,18 +38,48 @@ pub fn view(app: &Fitil) -> Element<'_, Message> {
     .into()
 }
 
+/// An item of a picker: a value shown with a translated or proper name.
+#[derive(Debug, Clone, PartialEq)]
+struct Choice<T> {
+    value: T,
+    name: String,
+}
+
+impl<T> std::fmt::Display for Choice<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)
+    }
+}
+
 fn top_bar(app: &Fitil) -> Element<'_, Message> {
     let t = &app.translations;
-    let market_button = |market: Market, key: &str| {
-        let style = if app.market == market {
-            button::primary
-        } else {
-            button::secondary
-        };
-        button(text(t.get(key)))
-            .style(style)
-            .on_press(Message::MarketSelected(market))
-    };
+    let exchanges: Vec<Choice<ExchangeId>> = app
+        .exchanges
+        .iter()
+        .map(|exchange| Choice {
+            value: exchange.id(),
+            name: exchange.name().to_owned(),
+        })
+        .collect();
+    let current_exchange = exchanges
+        .iter()
+        .find(|choice| choice.value == app.market.exchange)
+        .cloned();
+    let market_buttons = app
+        .markets
+        .keys()
+        .filter(|market| market.exchange == app.market.exchange)
+        .map(|&market| {
+            let style = if app.market == market {
+                button::primary
+            } else {
+                button::secondary
+            };
+            button(text(t.get(market_key(market.kind))))
+                .style(style)
+                .on_press(Message::MarketSelected(market))
+                .into()
+        });
     let language_button = |language: Language| {
         let style = if t.language() == language {
             button::primary
@@ -66,8 +94,11 @@ fn top_bar(app: &Fitil) -> Element<'_, Message> {
     row![
         text(t.get("app-title")).size(22),
         space().width(12),
-        market_button(Market::Spot, "market-spot"),
-        market_button(Market::UsdMFutures, "market-futures"),
+        pick_list(exchanges, current_exchange, |choice| {
+            Message::ExchangeSelected(choice.value)
+        })
+        .width(130),
+        row(market_buttons).spacing(6),
         text_input(&t.get("search-placeholder"), &app.search)
             .on_input(Message::SearchChanged)
             .width(260),
@@ -98,31 +129,7 @@ fn watchlist(app: &Fitil) -> Element<'_, Message> {
         Load::Ready => {}
     }
 
-    let search = app.search.trim().to_uppercase();
-    let tickers: Vec<_> = state
-        .tickers
-        .values()
-        .filter(|ticker| ticker.symbol.contains(&search))
-        .collect();
-    // Pairs are quoted in many currencies (USDT, TRY, IDR, BTC...), so volumes are
-    // compared in dollars.
-    let mut rates: HashMap<&str, f64> = HashMap::new();
-    let mut usd_volume = |ticker: &Ticker| {
-        let quote = state
-            .symbols
-            .get(&ticker.symbol)
-            .map_or("", |symbol| symbol.quote_asset.as_str());
-        let rate = *rates
-            .entry(quote)
-            .or_insert_with(|| usd_rate(quote, &state.tickers).unwrap_or(0.0));
-        ticker.quote_volume * rate
-    };
-    let mut ranked: Vec<_> = tickers
-        .into_iter()
-        .map(|ticker| (usd_volume(ticker), ticker))
-        .collect();
-    ranked.sort_by(|a, b| b.0.total_cmp(&a.0));
-    let mut tickers: Vec<_> = ranked.into_iter().map(|(_, ticker)| ticker).collect();
+    let mut tickers = state.board.ranked(&app.search);
     let total = tickers.len();
     tickers.truncate(WATCHLIST_ROWS);
 
@@ -146,8 +153,8 @@ fn watchlist(app: &Fitil) -> Element<'_, Message> {
 
     let rows = Column::with_children(tickers.iter().map(|ticker| {
         let decimals = state
-            .symbols
-            .get(&ticker.symbol)
+            .board
+            .symbol(&ticker.symbol)
             .map_or(2, |symbol| symbol.price_decimals);
         let change = ticker.change_percent();
         let change_style = if change >= 0.0 {
@@ -207,19 +214,6 @@ fn watchlist(app: &Fitil) -> Element<'_, Message> {
     .into()
 }
 
-/// A chart type in the picker, shown with its translated name.
-#[derive(Debug, Clone, PartialEq)]
-struct KindChoice {
-    kind: ChartKind,
-    name: String,
-}
-
-impl std::fmt::Display for KindChoice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.name)
-    }
-}
-
 fn kind_key(kind: ChartKind) -> &'static str {
     match kind {
         ChartKind::Candles => "chart-kind-candles",
@@ -236,23 +230,25 @@ fn details(app: &Fitil) -> Element<'_, Message> {
     let Some(selection) = &app.selection else {
         return padded(text(t.get("detail-empty")).style(text::secondary));
     };
+    let series = &selection.series;
+    let market = selection.symbol.market;
 
-    let natives = fitil_exchange::binance::native_timeframes(selection.symbol.market);
+    let natives = app.exchange(market.exchange).timeframes(market.kind);
     let timeframes: Vec<Timeframe> = TIMEFRAME_CHOICES
         .iter()
         .filter_map(|choice| choice.parse::<Timeframe>().ok())
         .filter(|timeframe| timeframe.best_source(natives).is_some())
         .collect();
-    let kinds: Vec<KindChoice> = ChartKind::ALL
+    let kinds: Vec<Choice<ChartKind>> = ChartKind::ALL
         .into_iter()
-        .map(|kind| KindChoice {
-            kind,
+        .map(|kind| Choice {
+            value: kind,
             name: t.get(kind_key(kind)),
         })
         .collect();
     let current_kind = kinds
         .iter()
-        .find(|choice| choice.kind == app.chart_kind)
+        .find(|choice| choice.value == app.chart_kind)
         .cloned();
     let scale_button = |scale: PriceScale, key: &str| {
         let style = if app.price_scale == scale {
@@ -268,15 +264,15 @@ fn details(app: &Fitil) -> Element<'_, Message> {
     let mut info = t.get_with(
         "detail-cached",
         &[
-            ("count", format::count(selection.cached, t.language())),
-            ("timeframe", selection.source.to_string()),
+            ("count", format::count(series.cached(), t.language())),
+            ("timeframe", series.source().to_string()),
         ],
     );
-    if selection.source != selection.timeframe {
+    if series.source() != series.target() {
         info.push_str(" · ");
-        info.push_str(&t.get_with("detail-source", &[("source", selection.source.to_string())]));
+        info.push_str(&t.get_with("detail-source", &[("source", series.source().to_string())]));
     }
-    if selection.complete {
+    if series.complete() {
         info.push_str(" · ");
         info.push_str(&t.get("detail-complete"));
     }
@@ -284,12 +280,12 @@ fn details(app: &Fitil) -> Element<'_, Message> {
     let toolbar = row![
         pick_list(
             timeframes,
-            Some(selection.timeframe),
+            Some(series.target()),
             Message::TimeframeSelected
         )
         .width(90),
         pick_list(kinds, current_kind, |choice| Message::ChartKindSelected(
-            choice.kind
+            choice.value
         ))
         .width(150),
         scale_button(PriceScale::Logarithmic, "scale-log"),
@@ -304,7 +300,7 @@ fn details(app: &Fitil) -> Element<'_, Message> {
     if let Some(error) = &selection.error {
         content = content.push(text(error.message(t)).style(text::danger));
     }
-    let chart: Element<'_, Message> = if selection.candles.is_empty() && selection.loading {
+    let chart: Element<'_, Message> = if series.candles().is_empty() && series.loading() {
         container(text(t.get("detail-loading")).style(text::secondary))
             .center(Fill)
             .into()
@@ -321,7 +317,7 @@ fn status_bar(app: &Fitil) -> Element<'_, Message> {
     let t = &app.translations;
     let language = t.language();
     let state = &app.markets[&app.market];
-    let client = &app.clients[&app.market];
+    let exchange = app.exchange(app.market.exchange);
 
     let connection: Element<'_, Message> = match state.connection {
         Connection::Connecting => text(t.get("status-connecting")).into(),
@@ -336,19 +332,23 @@ fn status_bar(app: &Fitil) -> Element<'_, Message> {
         .style(text::danger)
         .into(),
     };
-    let (used, limit) = client.weight_usage();
-    let weight = t.get_with(
-        "status-weight",
-        &[
-            ("used", format::count(u64::from(used), language)),
-            ("limit", format::count(u64::from(limit), language)),
-        ],
-    );
-    let clock = t.get_with(
-        "status-clock",
-        &[("seconds", format::seconds(client.clock_offset(), language))],
-    );
-    let cache = data::cache_path()
+    // Shown only for exchanges that report them.
+    let usage = exchange.usage(app.market.kind).map(|usage| {
+        t.get_with(
+            "status-weight",
+            &[
+                ("used", format::count(u64::from(usage.used), language)),
+                ("limit", format::count(u64::from(usage.limit), language)),
+            ],
+        )
+    });
+    let clock = exchange.clock_offset().map(|offset| {
+        t.get_with(
+            "status-clock",
+            &[("seconds", format::seconds(offset, language))],
+        )
+    });
+    let cache = storage::cache_path()
         .map(|path| t.get_with("status-cache", &[("path", path.display().to_string())]))
         .unwrap_or_default();
     let version = t.get_with(
@@ -356,32 +356,14 @@ fn status_bar(app: &Fitil) -> Element<'_, Message> {
         &[("version", env!("CARGO_PKG_VERSION").to_owned())],
     );
 
-    row![
-        connection,
-        text(weight),
-        text(clock),
-        space().width(Fill),
-        text(cache).style(text::secondary),
-        text(version).style(text::secondary),
-    ]
-    .spacing(24)
-    .padding([6, 12])
-    .into()
-}
-
-/// Dollars per unit of `asset`, from the market's own `ASSETUSDT` or `USDTASSET` price.
-fn usd_rate(asset: &str, tickers: &HashMap<String, Ticker>) -> Option<f64> {
-    const DOLLARS: [&str; 6] = ["USDT", "USDC", "FDUSD", "TUSD", "USD1", "DAI"];
-    if DOLLARS.contains(&asset) {
-        return Some(1.0);
+    let mut bar = row![connection].spacing(24).padding([6, 12]);
+    for item in [usage, clock].into_iter().flatten() {
+        bar = bar.push(text(item));
     }
-    let price = |name: String| {
-        tickers
-            .get(&name)
-            .map(|ticker| ticker.last_price)
-            .filter(|price| *price > 0.0)
-    };
-    price(format!("{asset}USDT")).or_else(|| price(format!("USDT{asset}")).map(|p| 1.0 / p))
+    bar.push(space().width(Fill))
+        .push(text(cache).style(text::secondary))
+        .push(text(version).style(text::secondary))
+        .into()
 }
 
 fn padded<'a>(content: impl Into<Element<'a, Message>>) -> Element<'a, Message> {

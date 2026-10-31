@@ -51,8 +51,8 @@ status-weight = Request weight: { $used } / { $limit }
 status-clock = Clock offset: { $seconds } s
 status-cache = Cache: { $path }
 
-error-restricted = Binance is not available from your location.
-error-rate-limited = Binance reported too many requests. Wait { $seconds } s and try again.
-error-network = Could not reach Binance. Check your internet connection.
-error-exchange = Binance returned an error: { $detail }
+error-restricted = This exchange is not available from your location.
+error-rate-limited = The exchange reported too many requests. Wait { $seconds } s and try again.
+error-network = Could not reach the exchange. Check your internet connection.
+error-exchange = The exchange returned an error: { $detail }
 error-storage = The local cache is unavailable: { $detail }

@@ -119,7 +119,7 @@ Yapılan her şey tarih sırasıyla burada. En yeni kayıt en altta.
   - `error.rs`: hatalar Fluent anahtarlarına bağlanır.
   - Bir canlı test, veri katmanını uçtan uca doğruluyor.
 - **Diğer:**
-  - Önbellek konumu: Windows'ta `%LOCALAPPDATA%\Fitil\cache.sqlite`. `docs/TASARIM.md` §6.3 buna göre güncellendi.
+  - Önbellek konumu: Windows'ta `%LOCALAPPDATA%\Fitil\cache.sqlite`. `docs/TASARIM.md` §6.3 buna göre güncellendi (o bölüm sonradan §6.6 oldu).
   - `deny.toml`: `CDLA-Permissive-2.0` eklendi (HTTPS kök sertifika listesinin veri lisansı), `allow-wildcard-paths` açıldı.
 
 **Ekran denemesinden çıkan düzeltmeler:**
@@ -192,3 +192,54 @@ Bu denemeleri proje sahibi uygulamayı kullanırken yaptı.
 - 1-2-5 fiyat çizgileri ve Heikin Ashi formülü herkesin kullandığı bilinen yöntemler.
 
 **Not:** Proje sahibi bir ara oturumu durdurdu ("durdurmak zorunda kaldım") ve "devam edelim" dedi. O sırada uygulamayı kullanıyordu. Claude yeniden başlatırken proje sahibinin açık penceresini kapatmış oldu. Bundan sonra kullanıcı uygulamayı kullanıyorsa süreç kapatılmamalı.
+
+### Mimari düzenleme: çok borsalı, port/adaptör (tamamlandı)
+
+**Nasıl başladı:**
+- Proje sahibi sordu: "Projede kullandığımız mimari ne? Mimariyi pek konuşmadık ama temiz ve düzgün bir mimari kullanmak daha iyi olabilir."
+- Claude mevcut durumu anlattı. Katmanlar ayrıydı ama iki eksik vardı: iş mantığı arayüze karışmıştı (`main.rs` 734 satır) ve borsalar için ortak bir arayüz yoktu.
+- Claude port/adaptör düzenini önerdi.
+- Proje sahibi şunu ekledi: "Projeye Hyperliquid, OKX, Huobi gibi başka borsalar eklenebilir. Ayrıca farklı modüller de gelebilir, hepsini düşünerek hareket etmemiz daha iyi olur."
+
+**Yapılanlar:**
+1. **Tasarım belgesi:** `docs/TASARIM.md` §6 yeniden yazıldı:
+   - katmanlar ve bağımlılık tablosu, 6 kural,
+   - veri modeli (borsa, piyasa, sembol, mum),
+   - `Exchange` arayüzü, yeni borsa ekleme adımları, klasör yapısı.
+
+   Faz 2'deki borsa listesine Hyperliquid ve HTX eklendi.
+2. **Çekirdek:**
+   - Yeni tipler: `ExchangeId`, `MarketKind` (Spot, LinearPerpetual), `Market { exchange, kind }`.
+   - `Candle` içindeki `quote_volume`, `trades` ve `taker_buy_volume` artık `Option`. Birleştirmede biri bilinmiyorsa toplam da bilinmiyor sayılır.
+3. **`fitil-exchange`, borsa arayüzü:**
+   - `Exchange` trait'i.
+   - Ortak WebSocket motoru (`run_stream` ve `StreamProtocol`): ping yanıtı, düzenli ping gönderme, sessizlik süresi, yeniden bağlanma.
+   - `RateLimiter` artık her pencere süresiyle çalışıyor ve bildirmeyen borsalar için yerel sayaç tutuyor.
+   - `Clock`, `http_client`.
+   - Testler: yerel bir WebSocket sunucusuyla internetsiz yeniden bağlanma testi dahil, 9 test.
+4. **`fitil-binance`:** Binance kodu ayrı bir crate'e taşındı (git geçmişi korundu) ve `Exchange` arayüzünü uyguluyor. 9 test ve 2 canlı test.
+5. **`fitil-store`, göç 2:** Anahtara `exchange` eklendi, isteğe bağlı alanlar NULL olabiliyor, `usdm` → `perp`. 10 test var, ilk sürümün önbelleğini yükseltme testi dahil.
+6. **`fitil-market`, uygulama katmanı:**
+   - `loader.rs`: eskiden `fitil-app/data.rs` idi.
+   - `series.rs`: canlı mum, boşluk algılama, birleştirme ve eski mum ekleme kararları burada.
+   - `board.rs`: fiyat listesi ve dolar hacmine göre sıralama.
+   - Sahte borsayla internetsiz 13 test.
+7. **`fitil-app`:**
+   - Sadece ekran ve bağlantılar kaldı.
+   - Yeni dosyalar: `exchanges()` borsa listesi, `feed.rs`, `storage.rs`.
+   - Üst çubukta borsa seçici var.
+   - Hata metinleri borsa adı içermiyor ("Borsaya ulaşılamadı").
+   - `--open` artık `[borsa:]piyasa:SEMBOL[:tf]` biçiminde.
+   - `FITIL_DATA_DIR` ile önbellek klasörü değiştirilebiliyor.
+   - Uçtan uca canlı test `tests/live.rs`'e taşındı.
+
+**Doğrulama:**
+- Toplam 77 test ve 3 canlı test (Binance REST, WebSocket, uçtan uca yükleme) geçti. fmt, clippy ve cargo-deny temiz.
+- Ekranda: proje sahibinin gerçek önbelleğinin kopyası (`FITIL_DATA_DIR`) yeni sürümle açıldı.
+  - ETHUSDT vadeli 15m mumların hepsi taşındı: 2.999 mum ve aradaki 2 yeni mum.
+  - Grafik, borsa seçici ve durum çubuğu doğru göründü.
+- Proje sahibinin açık penceresi (eski sürüm) kapatılmadı. Testler `target/verify` klasöründe derlendi.
+
+**Bilinen küçük sorun:** Önbellek yolu çok uzunsa durum çubuğu iki satıra bölünüyor. Sadece test klasöründe görüldü.
+
+**Diğer borsalar için araştırma:** OKX, Hyperliquid, HTX ve Bybit API'leri arka planda araştırıldı. Sonuçlar `04-teknik-notlar.md` dosyasında "Diğer borsalar" başlığında.

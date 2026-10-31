@@ -26,4 +26,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - crosshair with price and time labels, a legend with the hovered candle's values,
     and the last price with a countdown to the candle's close,
   - older candles load automatically when the chart is moved toward the past.
-- `--open spot:BTCUSDT:1h` (or `futures:…`) opens a chart at start.
+- `--open [exchange:]market:SYMBOL[:timeframe]`, such as `--open binance:futures:ETHUSDT:4h`,
+  opens a chart at start.
+- An exchange picker in the top bar, ready for more exchanges.
+- `FITIL_DATA_DIR` moves the data folder (for tests and portable use).
+
+### Changed
+
+- Ports-and-adapters architecture, so more exchanges and modules can be added without
+  touching the rest (see [docs/TASARIM.md](docs/TASARIM.md) §6):
+  - `fitil-exchange` is now the exchange interface every adapter implements, with a
+    shared reconnecting WebSocket loop, rate limiter and clock;
+  - Binance moved into its own adapter crate, `fitil-binance`;
+  - loading, live-update and watchlist logic moved out of the window into a new
+    application layer, `fitil-market`, tested with a fake exchange.
+- Candles' quote volume, trade count and taker volume are optional, since not every
+  exchange reports them.
+- The candle cache keys include the exchange. Existing caches are upgraded in place.

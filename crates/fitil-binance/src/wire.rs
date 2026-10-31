@@ -1,11 +1,9 @@
 //! Binance's JSON formats and their conversion into Fitil's types.
 
-use fitil_core::{Candle, Market, Symbol, Ticker, Timeframe, decimals_from_step};
+use fitil_core::{Candle, Market, MarketKind, Symbol, Ticker, Timeframe, decimals_from_step};
+use fitil_exchange::ExchangeError;
 use serde::Deserialize;
 use serde::de::IgnoredAny;
-
-use super::{ExchangeInfo as Info, endpoints};
-use crate::ExchangeError;
 
 fn number(field: &str, value: &str) -> Result<f64, ExchangeError> {
     value
@@ -60,7 +58,8 @@ struct Filter {
 }
 
 impl ExchangeInfo {
-    pub fn into_exchange_info(self, market: Market) -> Info {
+    /// The trading symbols of `market`, and the request weight allowed per minute.
+    pub fn into_symbols(self, market: Market) -> (Vec<Symbol>, Option<u32>) {
         let weight_limit = self
             .rate_limits
             .iter()
@@ -69,15 +68,15 @@ impl ExchangeInfo {
                     && limit.interval == "MINUTE"
                     && limit.interval_num == 1
             })
-            .map_or(endpoints(market).weight_limit, |limit| limit.limit);
+            .map(|limit| limit.limit);
 
         let symbols = self
             .symbols
             .into_iter()
             .filter(|symbol| symbol.status == "TRADING")
-            .filter(|symbol| match market {
-                Market::Spot => true,
-                Market::UsdMFutures => symbol
+            .filter(|symbol| match market.kind {
+                MarketKind::Spot => true,
+                MarketKind::LinearPerpetual => symbol
                     .contract_type
                     .as_deref()
                     .is_some_and(|kind| kind.ends_with("PERPETUAL")),
@@ -99,10 +98,7 @@ impl ExchangeInfo {
             })
             .collect();
 
-        Info {
-            symbols,
-            weight_limit,
-        }
+        (symbols, weight_limit)
     }
 }
 
@@ -133,9 +129,9 @@ impl Kline {
             low: number("low", &self.3)?,
             close: number("close", &self.4)?,
             volume: number("volume", &self.5)?,
-            quote_volume: number("quote volume", &self.7)?,
-            trades: self.8,
-            taker_buy_volume: number("taker buy volume", &self.9)?,
+            quote_volume: Some(number("quote volume", &self.7)?),
+            trades: Some(self.8),
+            taker_buy_volume: Some(number("taker buy volume", &self.9)?),
         })
     }
 }
@@ -257,9 +253,9 @@ impl KlineEvent {
                 low: number("low", &k.low)?,
                 close: number("close", &k.close)?,
                 volume: number("volume", &k.volume)?,
-                quote_volume: number("quote volume", &k.quote_volume)?,
-                trades: k.trades,
-                taker_buy_volume: number("taker buy volume", &k.taker_buy_volume)?,
+                quote_volume: Some(number("quote volume", &k.quote_volume)?),
+                trades: Some(k.trades),
+                taker_buy_volume: Some(number("taker buy volume", &k.taker_buy_volume)?),
             },
             symbol: k.symbol,
             timeframe,
@@ -272,44 +268,51 @@ impl KlineEvent {
 mod tests {
     use super::*;
 
-    const SPOT_INFO: &str = include_str!("../../tests/fixtures/binance/spot_exchange_info.json");
-    const FUTURES_INFO: &str =
-        include_str!("../../tests/fixtures/binance/futures_exchange_info.json");
-    const SPOT_KLINES: &str = include_str!("../../tests/fixtures/binance/spot_klines.json");
-    const FUTURES_KLINES: &str = include_str!("../../tests/fixtures/binance/futures_klines.json");
-    const SPOT_TICKERS: &str = include_str!("../../tests/fixtures/binance/spot_ticker_24hr.json");
+    const SPOT_INFO: &str = include_str!("../tests/fixtures/binance/spot_exchange_info.json");
+    const FUTURES_INFO: &str = include_str!("../tests/fixtures/binance/futures_exchange_info.json");
+    const SPOT_KLINES: &str = include_str!("../tests/fixtures/binance/spot_klines.json");
+    const FUTURES_KLINES: &str = include_str!("../tests/fixtures/binance/futures_klines.json");
+    const SPOT_TICKERS: &str = include_str!("../tests/fixtures/binance/spot_ticker_24hr.json");
     const FUTURES_TICKERS: &str =
-        include_str!("../../tests/fixtures/binance/futures_ticker_24hr.json");
+        include_str!("../tests/fixtures/binance/futures_ticker_24hr.json");
 
-    fn names(info: &Info) -> Vec<&str> {
-        info.symbols.iter().map(|s| s.name.as_str()).collect()
+    fn market(kind: MarketKind) -> Market {
+        Market {
+            exchange: crate::ID,
+            kind,
+        }
+    }
+
+    fn names(symbols: &[Symbol]) -> Vec<&str> {
+        symbols.iter().map(|s| s.name.as_str()).collect()
     }
 
     #[test]
     fn spot_symbols_skip_halted_ones() {
         let raw: ExchangeInfo = serde_json::from_str(SPOT_INFO).unwrap();
-        let info = raw.into_exchange_info(Market::Spot);
+        let (symbols, weight_limit) = raw.into_symbols(market(MarketKind::Spot));
 
-        assert_eq!(info.weight_limit, 6000);
-        assert_eq!(names(&info), ["BTCUSDT", "ETHBTC"]); // NEOBTC is in BREAK status
-        let btc = &info.symbols[0];
+        assert_eq!(weight_limit, Some(6000));
+        assert_eq!(names(&symbols), ["BTCUSDT", "ETHBTC"]); // NEOBTC is in BREAK status
+        let btc = &symbols[0];
         assert_eq!(
             (btc.base_asset.as_str(), btc.quote_asset.as_str()),
             ("BTC", "USDT")
         );
         assert_eq!(btc.price_decimals, 2);
-        assert_eq!(info.symbols[1].price_decimals, 5);
+        assert_eq!(symbols[1].price_decimals, 5);
     }
 
     #[test]
     fn futures_symbols_are_perpetuals() {
         let raw: ExchangeInfo = serde_json::from_str(FUTURES_INFO).unwrap();
-        let info = raw.into_exchange_info(Market::UsdMFutures);
+        let futures = market(MarketKind::LinearPerpetual);
+        let (symbols, weight_limit) = raw.into_symbols(futures);
 
-        assert_eq!(info.weight_limit, 2400);
-        assert_eq!(names(&info), ["BTCUSDT", "ETHUSDT", "XAUUSDT"]);
-        assert_eq!(info.symbols[0].price_decimals, 1);
-        assert!(info.symbols.iter().all(|s| s.market == Market::UsdMFutures));
+        assert_eq!(weight_limit, Some(2400));
+        assert_eq!(names(&symbols), ["BTCUSDT", "ETHUSDT", "XAUUSDT"]);
+        assert_eq!(symbols[0].price_decimals, 1);
+        assert!(symbols.iter().all(|s| s.market == futures));
     }
 
     #[test]
@@ -329,8 +332,8 @@ mod tests {
             for c in &candles {
                 assert!(c.low <= c.open && c.open <= c.high);
                 assert!(c.low <= c.close && c.close <= c.high);
-                assert!(c.taker_buy_volume <= c.volume);
-                assert!(c.trades > 0);
+                assert!(c.taker_buy_volume.unwrap() <= c.volume);
+                assert!(c.trades.unwrap() > 0);
             }
         }
 
@@ -338,7 +341,7 @@ mod tests {
         let first = klines.into_iter().next().unwrap().into_candle().unwrap();
         assert_eq!(first.open_time, 1_793_383_200_000);
         assert_eq!(first.open, 77192.46);
-        assert_eq!(first.trades, 227_428);
+        assert_eq!(first.trades, Some(227_428));
     }
 
     #[test]

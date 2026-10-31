@@ -1,6 +1,6 @@
 [package]
 name = "fitil-exchange"
-description = "Exchange adapters for Fitil, starting with Binance."
+description = "The exchange interface every Fitil exchange adapter implements, with shared tools."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,15 +8,15 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 fitil-core.workspace = true
 futures.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt"] }
+tokio = { workspace = true, features = ["net", "rt"] }

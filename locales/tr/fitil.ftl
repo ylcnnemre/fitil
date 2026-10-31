@@ -51,8 +51,8 @@ status-weight = İstek ağırlığı: { $used } / { $limit }
 status-clock = Saat farkı: { $seconds } sn
 status-cache = Önbellek: { $path }
 
-error-restricted = Binance bulunduğun yerden erişime izin vermiyor.
-error-rate-limited = Binance çok fazla istek gönderildiğini bildirdi. { $seconds } sn bekleyip tekrar dene.
-error-network = Binance'e ulaşılamadı. İnternet bağlantını kontrol et.
-error-exchange = Binance bir hata döndürdü: { $detail }
+error-restricted = Bu borsa bulunduğun yerden erişime izin vermiyor.
+error-rate-limited = Borsa çok fazla istek gönderildiğini bildirdi. { $seconds } sn bekleyip tekrar dene.
+error-network = Borsaya ulaşılamadı. İnternet bağlantını kontrol et.
+error-exchange = Borsa bir hata döndürdü: { $detail }
 error-storage = Yerel önbellek kullanılamıyor: { $detail }

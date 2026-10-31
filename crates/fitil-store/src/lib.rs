@@ -10,7 +10,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 /// Schema changes, applied in order. `PRAGMA user_version` records how many have run,
 /// so a cache written by an older Fitil is upgraded in place instead of being lost.
-const MIGRATIONS: &[&str] = &["
+const MIGRATIONS: &[&str] = &[
+    // 1: candles and series notes, for Binance only.
+    "
     CREATE TABLE candles (
         market TEXT NOT NULL,
         symbol TEXT NOT NULL,
@@ -34,7 +36,54 @@ const MIGRATIONS: &[&str] = &["
         history_start INTEGER,
         PRIMARY KEY (market, symbol, timeframe)
     ) WITHOUT ROWID;
-"];
+    ",
+    // 2: the exchange becomes part of every key, and quote volume, trade count and taker
+    // volume become optional because not every exchange reports them. Existing rows all
+    // came from Binance, whose futures market `usdm` is now called `perp`.
+    "
+    CREATE TABLE candles_v2 (
+        exchange TEXT NOT NULL,
+        market TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        timeframe TEXT NOT NULL,
+        open_time INTEGER NOT NULL,
+        open REAL NOT NULL,
+        high REAL NOT NULL,
+        low REAL NOT NULL,
+        close REAL NOT NULL,
+        volume REAL NOT NULL,
+        quote_volume REAL,
+        trades INTEGER,
+        taker_buy_volume REAL,
+        PRIMARY KEY (exchange, market, symbol, timeframe, open_time)
+    ) WITHOUT ROWID;
+    INSERT INTO candles_v2
+        SELECT 'binance', CASE market WHEN 'usdm' THEN 'perp' ELSE market END,
+               symbol, timeframe, open_time, open, high, low, close, volume,
+               quote_volume, trades, taker_buy_volume
+        FROM candles;
+    DROP TABLE candles;
+    ALTER TABLE candles_v2 RENAME TO candles;
+
+    CREATE TABLE series_v2 (
+        exchange TEXT NOT NULL,
+        market TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        timeframe TEXT NOT NULL,
+        history_start INTEGER,
+        PRIMARY KEY (exchange, market, symbol, timeframe)
+    ) WITHOUT ROWID;
+    INSERT INTO series_v2
+        SELECT 'binance', CASE market WHEN 'usdm' THEN 'perp' ELSE market END,
+               symbol, timeframe, history_start
+        FROM series;
+    DROP TABLE series;
+    ALTER TABLE series_v2 RENAME TO series;
+    ",
+];
+
+/// Matches one series in the `candles` and `series` tables; parameters ?1 to ?4.
+const SERIES: &str = "exchange = ?1 AND market = ?2 AND symbol = ?3 AND timeframe = ?4";
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -96,15 +145,16 @@ impl Store {
 
     /// Stores candles, replacing any with the same open time.
     pub fn save_candles(&mut self, key: &SeriesKey, candles: &[Candle]) -> Result<()> {
-        let (market, symbol, timeframe) = columns(key);
+        let [exchange, market, symbol, timeframe] = columns(key);
         let tx = self.conn.transaction()?;
         {
             let mut insert = tx.prepare_cached(
                 "INSERT OR REPLACE INTO candles
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             )?;
             for c in candles {
                 insert.execute(params![
+                    exchange,
                     market,
                     symbol,
                     timeframe,
@@ -115,7 +165,7 @@ impl Store {
                     c.close,
                     c.volume,
                     c.quote_volume,
-                    c.trades as i64,
+                    c.trades.map(|trades| trades as i64),
                     c.taker_buy_volume,
                 ])?;
             }
@@ -126,29 +176,32 @@ impl Store {
 
     /// Candles opening between `from` and `to` (both inclusive), oldest first.
     pub fn candles(&self, key: &SeriesKey, from: i64, to: i64) -> Result<Vec<Candle>> {
-        let (market, symbol, timeframe) = columns(key);
-        let mut query = self.conn.prepare_cached(
+        let [exchange, market, symbol, timeframe] = columns(key);
+        let mut query = self.conn.prepare_cached(&format!(
             "SELECT open_time, open, high, low, close, volume, quote_volume, trades, taker_buy_volume
              FROM candles
-             WHERE market = ?1 AND symbol = ?2 AND timeframe = ?3 AND open_time BETWEEN ?4 AND ?5
-             ORDER BY open_time",
+             WHERE {SERIES} AND open_time BETWEEN ?5 AND ?6
+             ORDER BY open_time"
+        ))?;
+        let rows = query.query_map(
+            params![exchange, market, symbol, timeframe, from, to],
+            read_candle,
         )?;
-        let rows = query.query_map(params![market, symbol, timeframe, from, to], read_candle)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// The newest `limit` candles, oldest first.
     pub fn latest_candles(&self, key: &SeriesKey, limit: usize) -> Result<Vec<Candle>> {
-        let (market, symbol, timeframe) = columns(key);
-        let mut query = self.conn.prepare_cached(
+        let [exchange, market, symbol, timeframe] = columns(key);
+        let mut query = self.conn.prepare_cached(&format!(
             "SELECT open_time, open, high, low, close, volume, quote_volume, trades, taker_buy_volume
              FROM candles
-             WHERE market = ?1 AND symbol = ?2 AND timeframe = ?3
+             WHERE {SERIES}
              ORDER BY open_time DESC
-             LIMIT ?4",
-        )?;
+             LIMIT ?5"
+        ))?;
         let rows = query.query_map(
-            params![market, symbol, timeframe, limit as i64],
+            params![exchange, market, symbol, timeframe, limit as i64],
             read_candle,
         )?;
         let mut candles = rows.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -158,12 +211,10 @@ impl Store {
 
     /// The oldest and newest stored open times and the number of candles, if any are stored.
     pub fn range(&self, key: &SeriesKey) -> Result<Option<SeriesRange>> {
-        let (market, symbol, timeframe) = columns(key);
+        let [exchange, market, symbol, timeframe] = columns(key);
         let range = self.conn.query_row(
-            "SELECT MIN(open_time), MAX(open_time), COUNT(*)
-             FROM candles
-             WHERE market = ?1 AND symbol = ?2 AND timeframe = ?3",
-            params![market, symbol, timeframe],
+            &format!("SELECT MIN(open_time), MAX(open_time), COUNT(*) FROM candles WHERE {SERIES}"),
+            params![exchange, market, symbol, timeframe],
             |row| {
                 let oldest: Option<i64> = row.get(0)?;
                 let newest: Option<i64> = row.get(1)?;
@@ -180,13 +231,12 @@ impl Store {
 
     /// Open time of the exchange's first candle for this series, once the cache reaches it.
     pub fn history_start(&self, key: &SeriesKey) -> Result<Option<i64>> {
-        let (market, symbol, timeframe) = columns(key);
+        let [exchange, market, symbol, timeframe] = columns(key);
         let start = self
             .conn
             .query_row(
-                "SELECT history_start FROM series
-                 WHERE market = ?1 AND symbol = ?2 AND timeframe = ?3",
-                params![market, symbol, timeframe],
+                &format!("SELECT history_start FROM series WHERE {SERIES}"),
+                params![exchange, market, symbol, timeframe],
                 |row| row.get(0),
             )
             .optional()?;
@@ -195,25 +245,25 @@ impl Store {
 
     /// Records that the exchange has no candles before `open_time` for this series.
     pub fn set_history_start(&mut self, key: &SeriesKey, open_time: i64) -> Result<()> {
-        let (market, symbol, timeframe) = columns(key);
+        let [exchange, market, symbol, timeframe] = columns(key);
         self.conn.execute(
-            "INSERT INTO series (market, symbol, timeframe, history_start) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT (market, symbol, timeframe) DO UPDATE SET history_start = excluded.history_start",
-            params![market, symbol, timeframe, open_time],
+            "INSERT INTO series (exchange, market, symbol, timeframe, history_start)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (exchange, market, symbol, timeframe)
+             DO UPDATE SET history_start = excluded.history_start",
+            params![exchange, market, symbol, timeframe, open_time],
         )?;
         Ok(())
     }
 
     /// Removes every stored candle and note about this series.
     pub fn clear_series(&mut self, key: &SeriesKey) -> Result<()> {
-        let (market, symbol, timeframe) = columns(key);
+        let [exchange, market, symbol, timeframe] = columns(key);
         let tx = self.conn.transaction()?;
         for table in ["candles", "series"] {
             tx.execute(
-                &format!(
-                    "DELETE FROM {table} WHERE market = ?1 AND symbol = ?2 AND timeframe = ?3"
-                ),
-                params![market, symbol, timeframe],
+                &format!("DELETE FROM {table} WHERE {SERIES}"),
+                params![exchange, market, symbol, timeframe],
             )?;
         }
         tx.commit()?;
@@ -221,8 +271,14 @@ impl Store {
     }
 }
 
-fn columns(key: &SeriesKey) -> (&'static str, &str, String) {
-    (key.market.id(), &key.symbol, key.timeframe.to_string())
+/// Exchange, market, symbol and timeframe of a series, as stored.
+fn columns(key: &SeriesKey) -> [String; 4] {
+    [
+        key.market.exchange.as_str().to_owned(),
+        key.market.kind.id().to_owned(),
+        key.symbol.clone(),
+        key.timeframe.to_string(),
+    ]
 }
 
 fn read_candle(row: &rusqlite::Row) -> rusqlite::Result<Candle> {
@@ -234,7 +290,7 @@ fn read_candle(row: &rusqlite::Row) -> rusqlite::Result<Candle> {
         close: row.get(4)?,
         volume: row.get(5)?,
         quote_volume: row.get(6)?,
-        trades: row.get::<_, i64>(7)? as u64,
+        trades: row.get::<_, Option<i64>>(7)?.map(|trades| trades as u64),
         taker_buy_volume: row.get(8)?,
     })
 }
@@ -242,15 +298,21 @@ fn read_candle(row: &rusqlite::Row) -> rusqlite::Result<Candle> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fitil_core::Market;
+    use fitil_core::{ExchangeId, Market, MarketKind};
     use std::path::PathBuf;
 
-    fn key(timeframe: &str) -> SeriesKey {
+    const BINANCE: ExchangeId = ExchangeId::new("binance");
+
+    fn key_on(exchange: ExchangeId, kind: MarketKind, timeframe: &str) -> SeriesKey {
         SeriesKey {
-            market: Market::Spot,
+            market: Market { exchange, kind },
             symbol: "BTCUSDT".into(),
             timeframe: timeframe.parse().unwrap(),
         }
+    }
+
+    fn key(timeframe: &str) -> SeriesKey {
+        key_on(BINANCE, MarketKind::Spot, timeframe)
     }
 
     fn candle(hour: i64, close: f64) -> Candle {
@@ -261,9 +323,9 @@ mod tests {
             low: close - 2.0,
             close,
             volume: 1.5,
-            quote_volume: close * 1.5,
-            trades: 42,
-            taker_buy_volume: 0.5,
+            quote_volume: Some(close * 1.5),
+            trades: Some(42),
+            taker_buy_volume: Some(0.5),
         }
     }
 
@@ -306,6 +368,38 @@ mod tests {
             vec![candles[2], candles[0]]
         );
         assert!(store.candles(&key("4h"), 0, i64::MAX).unwrap().is_empty());
+    }
+
+    #[test]
+    fn unknown_fields_are_kept_unknown() {
+        let mut store = Store::open_in_memory().unwrap();
+        let bare = Candle {
+            quote_volume: None,
+            trades: None,
+            taker_buy_volume: None,
+            ..candle(1, 10.0)
+        };
+        store.save_candles(&key("1h"), &[bare]).unwrap();
+        assert_eq!(store.candles(&key("1h"), 0, i64::MAX).unwrap(), vec![bare]);
+    }
+
+    #[test]
+    fn exchanges_and_markets_are_kept_apart() {
+        let mut store = Store::open_in_memory().unwrap();
+        let okx = key_on(ExchangeId::new("okx"), MarketKind::Spot, "1h");
+        let futures = key_on(BINANCE, MarketKind::LinearPerpetual, "1h");
+        store.save_candles(&key("1h"), &[candle(1, 10.0)]).unwrap();
+        store.save_candles(&okx, &[candle(1, 20.0)]).unwrap();
+
+        assert_eq!(
+            store.candles(&okx, 0, i64::MAX).unwrap(),
+            vec![candle(1, 20.0)]
+        );
+        assert_eq!(
+            store.candles(&key("1h"), 0, i64::MAX).unwrap(),
+            vec![candle(1, 10.0)]
+        );
+        assert_eq!(store.range(&futures).unwrap(), None);
     }
 
     #[test]
@@ -381,6 +475,40 @@ mod tests {
             store.candles(&key("1h"), 0, i64::MAX).unwrap(),
             vec![candle(1, 10.0)]
         );
+    }
+
+    #[test]
+    fn upgrades_a_cache_from_the_first_version() {
+        let db = TempDb::new("upgrade");
+        {
+            // A cache as the first version of Fitil left it.
+            std::fs::create_dir_all(db.0.parent().unwrap()).unwrap();
+            let conn = Connection::open(&db.0).unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+            conn.execute(
+                "INSERT INTO candles VALUES ('usdm', 'ETHUSDT', '1h', 3600000, 1, 2, 0.5, 1.5, 10, 15, 7, 4)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO series VALUES ('usdm', 'ETHUSDT', '1h', 3600000)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let store = Store::open(&db.0).unwrap();
+        let key = SeriesKey {
+            symbol: "ETHUSDT".into(),
+            ..key_on(BINANCE, MarketKind::LinearPerpetual, "1h")
+        };
+        let candles = store.candles(&key, 0, i64::MAX).unwrap();
+        assert_eq!(candles.len(), 1);
+        assert_eq!(candles[0].close, 1.5);
+        assert_eq!(candles[0].trades, Some(7));
+        assert_eq!(candles[0].taker_buy_volume, Some(4.0));
+        assert_eq!(store.history_start(&key).unwrap(), Some(3_600_000));
     }
 
     #[test]

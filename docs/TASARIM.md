@@ -160,7 +160,7 @@ v0.1 yayınlanmadan önce şunların sağlanması hedefleniyor:
 - **Kendi indikatörünü yazma:** Uygulamanın içinde Lua tabanlı script editörü.
 - **İndikatör üstüne indikatör:** Örneğin RSI'ın hareketli ortalaması.
 - **Çoklu pencere:** Birden fazla pencere ve ikinci monitör desteği.
-- **Diğer borsalar:** Bybit, OKX, BtcTurk.
+- **Diğer borsalar:** OKX, Hyperliquid, HTX (Huobi), Bybit, BtcTurk. Her biri §6.3’teki adımlarla, ayrı bir adaptör olarak eklenir.
 - **Karşılaştırma:** Sembol karşılaştırma, BTC/ETH gibi oran grafikleri.
 - **Vadeli işlem verileri:** Funding oranı, açık pozisyon (OI), likidasyonlar.
 - **Genişleme:** Daha fazla çizim aracı ve indikatör, yeni arayüz dilleri.
@@ -180,51 +180,117 @@ v0.1 yayınlanmadan önce şunların sağlanması hedefleniyor:
 
 ## 6. Teknik mimari
 
+Fitil "port ve adaptör" (hexagonal) düzeniyle kurulur:
+- **Ortada:** Dış dünyadan habersiz bir çekirdek ve uygulama katmanı.
+- **Kenarlarda:** Dış dünyaya bağlanan adaptörler: borsalar, veritabanı, ekran.
+
+Proje, her biri tek bir işi yapan parçalara (crate) bölünür. Hedef üç şey:
+- yeni bir borsa eklemenin uygulamanın geri kalanına dokunmaması,
+- yeni bir modülün (alarmlar, backtest, script…) mevcut kodu bozmadan eklenebilmesi,
+- iş mantığının ekran olmadan, internet olmadan otomatik test edilebilmesi.
+
 ```
-┌────────────────────────── Fitil ───────────────────────────┐
-│                                                            │
-│  Arayüz (iced)                                             │
-│  pencere · grafik bölmeleri · izleme listesi · ayarlar     │
-│        │                     ▲                             │
-│        ▼                     │                             │
-│  Grafik motoru (GPU)    İndikatör motoru                   │
-│  mumlar · eksenler      artımlı hesaplama                  │
-│  çizim araçları                                            │
-│        ▲                     ▲                             │
-│        └──────────┬──────────┘                             │
-│              Veri katmanı                                  │
-│   borsa adaptörleri · WebSocket yöneticisi · istek limiti  │
-│                   │                                        │
-│              Yerel depo (SQLite)                           │
-│   mum önbelleği · çizimler · düzenler · ayarlar            │
-└───────────────────┬────────────────────────────────────────┘
-                    │ doğrudan (REST + WebSocket)
-                 Binance
+  fitil-app ············· pencere, ekranlar, her şeyi birbirine bağlayan yer
+      │
+      ├── fitil-market ··· uygulama katmanı: seriler, izleme listesi
+      ├── fitil-chart ···· grafik bileşeni
+      ├── (ileride) fitil-alerts, fitil-backtest, fitil-script …
+      │
+      ├── fitil-exchange · BORSA ARAYÜZÜ + ortak borsa araçları
+      │       ▲ uygular
+      │   fitil-binance, (ileride) fitil-okx, fitil-hyperliquid, fitil-htx, fitil-bybit …
+      │
+      ├── fitil-store ···· yerel veritabanı (SQLite)
+      ├── fitil-indicators  indikatör hesapları
+      │
+      └── fitil-core ····· alan modeli: mum, sembol, piyasa, zaman dilimi
 ```
 
-### 6.1 Kod yapısı
+| Crate | Görevi | Bağlı olabileceği crate'ler |
+|---|---|---|
+| `fitil-core` | Alan modeli: mum, sembol, piyasa, borsa kimliği, zaman dilimi, mum birleştirme. | — (hiçbiri) |
+| `fitil-exchange` | Borsa arayüzü (`Exchange`): her borsanın uyduğu sözleşme. Ortak araçlar: WebSocket bağlantı motoru, istek limiti, hata tipleri. | core |
+| `fitil-binance` ve ileride diğer borsalar | Bir borsanın adaptörü: arayüzü o borsanın API'siyle uygular. | core, exchange |
+| `fitil-store` | Yerel veritabanı: mum önbelleği, ileride çizimler, düzenler ve ayarlar. Sürüm numaralı göçlerle (migration) çalışır. | core |
+| `fitil-indicators` | İndikatör hesapları. Saf hesap: mumlar girer, seriler çıkar. | core |
+| `fitil-market` | Uygulama katmanı:<br>• seriyi yükleme (önce önbellek, eksikler borsadan),<br>• boşluk doldurma, eski mum yükleme,<br>• canlı mumu işleme,<br>• izleme listesi.<br>Ekranı ve interneti tanımaz, borsayı sadece arayüzü üzerinden kullanır. | core, exchange (yalnızca arayüz), store |
+| `fitil-chart` | Grafik bileşeni. | core, iced |
+| `fitil-app` | Pencere ve ekranlar. Borsa adaptörlerini kaydeder, katmanları birbirine bağlar. | hepsi |
 
-Proje, birbirinden bağımsız test edilebilen parçalara bölünür (Cargo workspace):
+**Kurallar:**
+1. **Bağımlılıklar tek yönlüdür.** Tablodaki "bağlı olabileceği" sütununun dışına çıkılmaz. `fitil-market` hiçbir borsa adaptörünü tanımaz, `fitil-core` hiçbir şeyi tanımaz.
+2. **İş mantığı arayüz kodunda olmaz.**
+   - `fitil-app` sadece gösterir ve parçaları birbirine bağlar.
+   - Kararlar `fitil-market`'te verilir ve orada sahte bir borsayla, internetsiz test edilir.
+3. **Borsaya özgü hiçbir şey adaptörün dışına sızmaz:** sembol biçimi (BTCUSDT, BTC-USDT-SWAP, BTC), zaman dilimi adları, limitler, mesaj biçimleri, sıkıştırma, ping kuralları.
+4. **Borsalar yeteneklerini açıkça bildirir** (bkz. 6.2). Uygulama, yeteneği olmayan bir borsada o özelliği gizler; asla uydurma veri üretmez.
+5. **Yeni modüller kendi crate'inde yazılır.** Alarmlar, backtest, script, emir defteri ısı haritası gibi modüller sadece alt katmanları kullanır, birbirine bağlanmaz. Birden fazla modülün ihtiyacı olan şey alt katmana taşınır.
+6. **Kalıcı veri tek yerde durur:** `fitil-store`. Her şema değişikliği sürüm numaralı bir göçle yapılır; kullanıcının verisi güncellemede kaybolmaz.
+
+### 6.1 Veri modeli: borsa, piyasa, sembol
+
+- **Borsa kimliği:** `binance`, `okx`, `hyperliquid` … Önbellekte ve ayarlarda anahtar olarak kullanılır, hiç değişmez.
+- **Piyasa türü:** Spot ve Vadeli (doğrusal perpetual: USDT veya USDC teminatlı). İleride coin teminatlı perpetual ve vadeli kontratlar eklenebilir.
+- **Piyasa = borsa + piyasa türü.** İzleme listesindeki her sekme bir piyasadır: "Binance Spot", "OKX Vadeli" gibi.
+- **Sembol:** Borsanın kendi adıyla saklanır (Binance `BTCUSDT`, OKX `BTC-USDT-SWAP`, Hyperliquid `BTC`).
+- **Mum:**
+  - Açılış, en yüksek, en düşük, kapanış ve hacim (baz varlık cinsinden) her borsada vardır.
+  - Kote hacmi, işlem sayısı ve taker alış hacmi her borsada yoktur. Bu alanlar "bilinmiyor" olabilir.
+  - Vadeli hacimlerini kontrat sayısından baz varlığa çevirmek adaptörün işidir.
+- **Saat dilimi:** Mumlar UTC'ye hizalıdır. Günlük mumları başka bir saat dilimine hizalayan borsalarda (örneğin OKX'in varsayılanı UTC+8) adaptör UTC sürümünü ister.
+
+### 6.2 Borsa arayüzü (`Exchange`)
+
+Her adaptör şunları sağlar:
+
+| Görev | Açıklama |
+|---|---|
+| Kimlik ve ad | `binance` / "Binance" |
+| Piyasalar | Sunduğu piyasa türleri. |
+| Zaman dilimleri | Her piyasa için borsanın doğrudan verdikleri. Diğerleri bunlardan üretilir. |
+| Semboller | İşlem gören semboller ve fiyat hassasiyeti. |
+| 24 saatlik istatistikler | Tüm semboller için son fiyat, 24 saat önceki fiyat ve kote hacmi. |
+| Mumlar | Üç sorgu: "en yeni N mum", "şu andan sonraki N mum", "şu andan önceki N mum". Ayrıca tek istekte en fazla kaç mum verildiği. |
+| Canlı veri | Tüm sembollerin fiyatları ve seçili sembolün açık mumu. Borsanın WebSocket'inde tüm piyasa için tek bir kanal yoksa, adaptör bunu kısa aralıklı REST sorgusuyla sağlar. |
+| Saat | Borsanın saati, varsa. Saat farkı düzeltmesi için kullanılır. |
+| İstek kullanımı | Durum çubuğu için, varsa. Binance'te istek ağırlığıdır. |
+| Yetenekler | • Mumlarda taker alış hacmi var mı? Alış/satış hacmi ve CVD bunu gerektirir.<br>• Geçmiş sayfa sayfa en başa kadar indirilebiliyor mu? |
+
+**Ortak WebSocket motoru** (`fitil-exchange`):
+- **Herkes için ortak:** bağlanma, koptuğunda artan aralıklarla yeniden bağlanma, sessizliği algılama, abonelikleri yeniden kurma.
+- **Adaptörün tanımladığı:** sadece kendi "protokolü". Adres, abone olma mesajı, gelen mesajların çözümü, ping kuralları ve sıkıştırma.
+
+### 6.3 Yeni bir borsa eklemek
+
+1. `crates/` altına `fitil-<borsa>` adaptörü açılır ve `Exchange` arayüzü uygulanır.
+2. Borsanın gerçek yanıtları kaydedilip testlere konur (internetsiz testler). İsteğe bağlı olarak canlı testler de eklenir.
+3. `fitil-app` içindeki borsa listesine bir satır eklenir.
+
+Uygulamanın başka hiçbir yeri değişmez.
+
+### 6.4 Kod yapısı
 
 ```
 fitil/
 ├─ crates/
-│  ├─ fitil-core/        ortak veri tipleri: mum, sembol, zaman dilimi
-│  ├─ fitil-exchange/    borsa adaptörleri (önce Binance)
-│  ├─ fitil-store/       SQLite önbellek ve kayıtlar
-│  ├─ fitil-indicators/  indikatör hesaplamaları
-│  ├─ fitil-chart/       grafik motoru ve çizim araçları
-│  └─ fitil-app/         uygulamanın kendisi, arayüz
+│  ├─ fitil-core/         alan modeli
+│  ├─ fitil-exchange/     borsa arayüzü ve ortak borsa araçları
+│  ├─ fitil-binance/      Binance adaptörü
+│  ├─ fitil-store/        yerel veritabanı (SQLite)
+│  ├─ fitil-market/       uygulama katmanı
+│  ├─ fitil-indicators/   indikatör hesapları
+│  ├─ fitil-chart/        grafik bileşeni
+│  └─ fitil-app/          pencere ve ekranlar
 ├─ locales/
-│  ├─ tr/                Türkçe metinler
-│  └─ en/                İngilizce metinler
-├─ docs/                 belgeler (bu dosya dahil)
-└─ .github/workflows/    otomatik derleme ve test
+│  ├─ tr/                 Türkçe metinler
+│  └─ en/                 İngilizce metinler
+├─ docs/                  belgeler (bu dosya dahil)
+├─ memory/                proje hafızası
+├─ scripts/               geliştirme yardımcıları
+└─ .github/workflows/     otomatik derleme ve test
 ```
 
-Her borsa aynı ortak arayüzü uygular. Yeni bir borsa eklemek, uygulamanın geri kalanına dokunmadan yeni bir adaptör yazmak demektir.
-
-### 6.2 Teknoloji seçimleri
+### 6.5 Teknoloji seçimleri
 
 | Konu | Seçim | Not |
 |---|---|---|
@@ -238,7 +304,7 @@ Her borsa aynı ortak arayüzü uygular. Yeni bir borsa eklemek, uygulamanın ge
 | Fiyatlar | 64 bit ondalık sayı | Ekranda sembolün kendi hassasiyetiyle gösterilir. |
 | Kullanıcı scriptleri (Faz 2) | Lua | Hızlı, küçük ve öğrenmesi kolay. |
 
-### 6.3 Verilerin saklandığı yer
+### 6.6 Verilerin saklandığı yer
 
 Her işletim sisteminin standart uygulama klasörü kullanılır:
 - **Windows:**
@@ -246,6 +312,8 @@ Her işletim sisteminin standart uygulama klasörü kullanılır:
   - Mum önbelleği (`cache.sqlite`): `%LOCALAPPDATA%\Fitil`. Büyüyebilen önbellek, şirket ağlarındaki dolaşan profillerle başka bilgisayarlara kopyalanmasın diye burada durur.
 - **macOS:** `~/Library/Application Support/Fitil`
 - **Linux:** `~/.local/share/fitil`
+
+`FITIL_DATA_DIR` ortam değişkeni bu klasörü değiştirir. Testlerde ve ileride kurulumsuz (taşınabilir) kullanımda işe yarar.
 
 ---
 

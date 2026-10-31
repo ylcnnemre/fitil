@@ -1,30 +1,57 @@
+use std::fmt;
+
 use crate::Timeframe;
 
-/// A group of instruments on an exchange.
+/// Identifies an exchange, such as `binance`. Used as a key in the cache, so it never changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Market {
-    Spot,
-    /// USDⓈ-margined perpetual futures.
-    UsdMFutures,
+pub struct ExchangeId(&'static str);
+
+impl ExchangeId {
+    pub const fn new(id: &'static str) -> Self {
+        Self(id)
+    }
+
+    pub fn as_str(self) -> &'static str {
+        self.0
+    }
 }
 
-impl Market {
-    pub const ALL: [Market; 2] = [Market::Spot, Market::UsdMFutures];
+impl fmt::Display for ExchangeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0)
+    }
+}
 
-    /// Stable identifier used in storage keys.
+/// A kind of market an exchange can offer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum MarketKind {
+    Spot,
+    /// Perpetual futures margined and settled in a stablecoin such as USDT or USDC.
+    LinearPerpetual,
+}
+
+impl MarketKind {
+    /// Stable identifier used in cache keys.
     pub fn id(self) -> &'static str {
         match self {
-            Market::Spot => "spot",
-            Market::UsdMFutures => "usdm",
+            MarketKind::Spot => "spot",
+            MarketKind::LinearPerpetual => "perp",
         }
     }
+}
+
+/// One market of one exchange, like "Binance spot". Each is a tab of the watchlist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Market {
+    pub exchange: ExchangeId,
+    pub kind: MarketKind,
 }
 
 /// A tradable instrument.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Symbol {
     pub market: Market,
-    /// The exchange's name for it, such as `BTCUSDT`.
+    /// The exchange's own name for it: `BTCUSDT` on Binance, `BTC-USDT-SWAP` on OKX.
     pub name: String,
     pub base_asset: String,
     pub quote_asset: String,

@@ -1,41 +1,43 @@
-//! Checks against the real Binance API. They need internet access, so they are
-//! skipped by default; run them with `cargo test -p fitil-exchange -- --ignored`.
+//! Checks against the real Binance API, through the shared `Exchange` interface. They
+//! need internet access, so they are skipped by default; run them with
+//! `cargo test -p fitil-binance -- --ignored`.
 
 use std::time::Duration;
 
-use fitil_core::Market;
-use fitil_exchange::binance::{BinanceClient, FeedCommand, FeedEvent, Topic, run_feed};
+use fitil_binance::Binance;
+use fitil_exchange::{CandleQuery, Exchange, FeedCommand, FeedEvent, Topic};
 use futures::StreamExt;
 use futures::channel::mpsc;
 
 #[tokio::test]
 #[ignore = "needs internet access"]
 async fn rest_api_answers_for_both_markets() {
-    for market in Market::ALL {
-        let client = BinanceClient::new(market).unwrap();
-        let offset = client.sync_clock().await.unwrap();
-        assert!(
-            offset.abs() < 60_000,
-            "{market:?}: clock offset {offset} ms"
-        );
+    let binance = Binance::new().unwrap();
+    binance.sync_clock().await.unwrap();
+    let offset = binance.clock_offset().unwrap();
+    assert!(offset.abs() < 60_000, "clock offset {offset} ms");
 
-        let info = client.exchange_info().await.unwrap();
-        assert!(
-            info.symbols.iter().any(|s| s.name == "BTCUSDT"),
-            "{market:?}"
-        );
+    for &market in binance.markets() {
+        let symbols = binance.symbols(market).await.unwrap();
+        assert!(symbols.iter().any(|s| s.name == "BTCUSDT"), "{market:?}");
 
-        let tickers = client.tickers().await.unwrap();
+        let tickers = binance.tickers(market).await.unwrap();
         assert!(tickers.iter().any(|t| t.symbol == "BTCUSDT"), "{market:?}");
 
         let hour = "1h".parse().unwrap();
-        let latest = client
-            .candles("BTCUSDT", hour, None, None, 5)
+        let latest = binance
+            .candles(market, "BTCUSDT", hour, CandleQuery::Latest { limit: 5 })
             .await
             .unwrap();
         assert_eq!(latest.len(), 5, "{market:?}");
-        let before = client
-            .candles("BTCUSDT", hour, None, Some(latest[0].open_time - 1), 5)
+        let end = latest[0].open_time - 1;
+        let before = binance
+            .candles(
+                market,
+                "BTCUSDT",
+                hour,
+                CandleQuery::Until { end, limit: 5 },
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -43,10 +45,10 @@ async fn rest_api_answers_for_both_markets() {
             latest[0].open_time - 3_600_000
         );
 
-        let (used, limit) = client.weight_usage();
+        let usage = binance.usage(market).unwrap();
         assert!(
-            used > 0 && used < limit,
-            "{market:?}: weight {used}/{limit}"
+            usage.used > 0 && usage.used < usage.limit,
+            "{market:?}: {usage:?}"
         );
     }
 }
@@ -54,10 +56,11 @@ async fn rest_api_answers_for_both_markets() {
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "needs internet access"]
 async fn feed_delivers_tickers_and_candles() {
-    for market in Market::ALL {
-        let (commands, command_rx) = mpsc::unbounded();
-        let (event_tx, mut events) = mpsc::channel(64);
-        let feed = tokio::spawn(run_feed(market, command_rx, event_tx));
+    let binance = Binance::new().unwrap();
+    for &market in binance.markets() {
+        let (commands, command_receiver) = mpsc::unbounded();
+        let (event_sender, mut events) = mpsc::channel(64);
+        let feed = tokio::spawn(binance.feed(market, command_receiver, event_sender));
         commands
             .unbounded_send(FeedCommand::Subscribe(Topic::AllTickers))
             .unwrap();

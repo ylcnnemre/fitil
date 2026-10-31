@@ -1,25 +1,27 @@
-//! Fitil desktop application entry point.
+//! Fitil desktop application: the window, its screens, and the wiring between them and
+//! the application layer (`fitil-market`). Decisions about market data are made there;
+//! this crate shows them and passes user input on.
 
 // Release builds on Windows should not open a console window next to the app.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod data;
 mod error;
+mod feed;
 mod format;
 mod i18n;
+mod storage;
 mod view;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use data::{Loaded, MarketSnapshot, SharedStore};
 use error::AppError;
 use fitil_chart::{Chart, ChartKind, ChartLabels, ChartMessage, PriceScale};
-use fitil_core::{Candle, Market, SeriesKey, Symbol, Ticker, Timeframe, aggregate_whole};
-use fitil_exchange::binance::{self, BinanceClient, FeedCommand, FeedEvent, Topic};
+use fitil_core::{Candle, ExchangeId, Market, MarketKind, SeriesKey, Symbol, Timeframe};
+use fitil_exchange::{Exchange, FeedCommand, FeedEvent, Topic};
+use fitil_market::{Board, LiveUpdate, Loaded, MarketError, MarketSnapshot, Series, SharedStore};
 use futures::channel::mpsc;
-use futures::{SinkExt, Stream, StreamExt};
 use i18n::{Language, Translations};
 use iced::{Element, Subscription, Task, Theme};
 
@@ -33,10 +35,17 @@ fn main() -> iced::Result {
         .run()
 }
 
+/// The exchanges Fitil shows. Adding an exchange means adding its adapter here.
+fn exchanges() -> Vec<Arc<dyn Exchange>> {
+    vec![Arc::new(
+        fitil_binance::Binance::new().expect("the HTTP client can be created"),
+    )]
+}
+
 /// Timeframe shown when a symbol is first opened.
 const DEFAULT_TIMEFRAME: &str = "1h";
 
-/// Timeframes offered in the picker; ones Binance lacks are built from shorter candles.
+/// Timeframes offered in the picker; ones an exchange lacks are built from shorter candles.
 const TIMEFRAME_CHOICES: [&str; 21] = [
     "1s", "1m", "3m", "5m", "15m", "30m", "45m", "1h", "2h", "3h", "4h", "6h", "8h", "12h", "1d",
     "2d", "3d", "1w", "2w", "1M", "3M",
@@ -44,10 +53,11 @@ const TIMEFRAME_CHOICES: [&str; 21] = [
 
 struct Fitil {
     translations: Translations,
-    store: Result<SharedStore, AppError>,
-    clients: HashMap<Market, Arc<BinanceClient>>,
-    markets: HashMap<Market, MarketState>,
-    /// The market whose symbols the watchlist shows.
+    cache: Result<SharedStore, AppError>,
+    exchanges: Vec<Arc<dyn Exchange>>,
+    /// Every market of every exchange, in exchange order.
+    markets: BTreeMap<Market, MarketState>,
+    /// The market the watchlist shows.
     market: Market,
     search: String,
     selection: Option<Selection>,
@@ -58,41 +68,9 @@ struct Fitil {
     pending_open: Option<OpenRequest>,
 }
 
-/// A chart named on the command line: `--open spot:BTCUSDT:1h` or `--open futures:ETHUSDT:4h`.
-#[derive(Debug, Clone, PartialEq)]
-struct OpenRequest {
-    market: Market,
-    symbol: String,
-    timeframe: Timeframe,
-}
-
-impl OpenRequest {
-    fn from_args(mut args: impl Iterator<Item = String>) -> Option<Self> {
-        args.find(|arg| arg == "--open")?;
-        let value = args.next()?;
-        let mut parts = value.split(':');
-        let market = match parts.next()? {
-            "spot" => Market::Spot,
-            "futures" => Market::UsdMFutures,
-            _ => return None,
-        };
-        let symbol = parts.next()?.to_uppercase();
-        let timeframe = match parts.next() {
-            Some(timeframe) => timeframe.parse().ok()?,
-            None => DEFAULT_TIMEFRAME.parse().ok()?,
-        };
-        Some(Self {
-            market,
-            symbol,
-            timeframe,
-        })
-    }
-}
-
 struct MarketState {
     load: Load,
-    symbols: HashMap<String, Symbol>,
-    tickers: HashMap<String, Ticker>,
+    board: Board,
     /// Sends subscription changes to the live feed once it is running.
     feed: Option<mpsc::UnboundedSender<FeedCommand>>,
     connection: Connection,
@@ -114,68 +92,83 @@ enum Connection {
 /// The symbol on the chart.
 struct Selection {
     symbol: Symbol,
-    /// The timeframe the user picked.
-    timeframe: Timeframe,
-    /// The timeframe downloaded from Binance to build `timeframe`.
-    source: Timeframe,
-    /// Loading the newest candles: on open, after a reconnect or after missed candles.
-    loading: bool,
-    loading_older: bool,
-    /// Closed `source` candles in memory, oldest first, without gaps.
-    candles: Vec<Candle>,
-    /// The open `source` candle.
-    live: Option<Candle>,
-    /// Whether `candles` starts at the symbol's first candle.
-    complete: bool,
-    /// Candles of this series in the cache.
-    cached: u64,
-    error: Option<AppError>,
+    series: Series,
     chart: Chart,
+    error: Option<AppError>,
 }
 
 impl Selection {
-    fn key(&self) -> SeriesKey {
-        SeriesKey {
-            market: self.symbol.market,
-            symbol: self.symbol.name.clone(),
-            timeframe: self.source,
-        }
-    }
-
     fn topic(&self) -> Topic {
         Topic::Candles {
             symbol: self.symbol.name.clone(),
-            timeframe: self.source,
+            timeframe: self.series.source(),
         }
     }
 
-    /// Rebuilds the chart's candles from the closed ones and the open one.
     fn refresh_chart(&mut self) {
-        let mut source = self.candles.clone();
-        if let Some(live) = self.live
-            && source
-                .last()
-                .is_none_or(|last| last.open_time < live.open_time)
-        {
-            source.push(live);
-        }
-        let shown = if self.timeframe == self.source {
-            source
-        } else {
-            aggregate_whole(&source, self.timeframe)
+        self.chart.set_candles(self.series.shown());
+        self.chart.set_history_complete(self.series.complete());
+        self.chart.set_loading_older(self.series.loading_older());
+    }
+}
+
+/// A chart named on the command line: `--open [exchange:]market:SYMBOL[:timeframe]`,
+/// such as `--open spot:BTCUSDT` or `--open binance:futures:ETHUSDT:4h`.
+#[derive(Debug, Clone, PartialEq)]
+struct OpenRequest {
+    /// The exchange's id; any exchange with the market when left out.
+    exchange: Option<String>,
+    kind: MarketKind,
+    symbol: String,
+    timeframe: Timeframe,
+}
+
+impl OpenRequest {
+    fn from_args(mut args: impl Iterator<Item = String>) -> Option<Self> {
+        args.find(|arg| arg == "--open")?;
+        let value = args.next()?;
+        let mut parts: Vec<&str> = value.split(':').collect();
+        let exchange = match parts.first() {
+            Some(first) if market_kind(first).is_none() => Some(parts.remove(0).to_lowercase()),
+            _ => None,
         };
-        self.chart.set_candles(shown);
-        self.chart.set_history_complete(self.complete);
-        self.chart.set_loading_older(self.loading_older);
+        let (kind, symbol, timeframe) = match parts.as_slice() {
+            [kind, symbol] => (*kind, *symbol, DEFAULT_TIMEFRAME),
+            [kind, symbol, timeframe] => (*kind, *symbol, *timeframe),
+            _ => return None,
+        };
+        Some(Self {
+            exchange,
+            kind: market_kind(kind)?,
+            symbol: symbol.to_uppercase(),
+            timeframe: timeframe.parse().ok()?,
+        })
+    }
+
+    fn matches(&self, market: Market) -> bool {
+        market.kind == self.kind
+            && self
+                .exchange
+                .as_deref()
+                .is_none_or(|exchange| exchange == market.exchange.as_str())
+    }
+}
+
+fn market_kind(name: &str) -> Option<MarketKind> {
+    match name {
+        "spot" => Some(MarketKind::Spot),
+        "futures" | "perp" => Some(MarketKind::LinearPerpetual),
+        _ => None,
     }
 }
 
 #[derive(Debug, Clone)]
 enum Message {
     LanguageSelected(Language),
+    ExchangeSelected(ExchangeId),
     MarketSelected(Market),
     SearchChanged(String),
-    MarketLoaded(Market, Result<MarketSnapshot, AppError>),
+    MarketLoaded(Market, Result<MarketSnapshot, MarketError>),
     RetryMarket(Market),
     FeedReady(Market, mpsc::UnboundedSender<FeedCommand>),
     Feed(Market, FeedEvent),
@@ -184,47 +177,51 @@ enum Message {
     ChartKindSelected(ChartKind),
     PriceScaleToggled(PriceScale),
     Chart(ChartMessage),
-    SeriesLoaded(SeriesKey, Result<Loaded, AppError>),
-    OlderLoaded(SeriesKey, Result<Loaded, AppError>),
-    CandleSaved(SeriesKey, Result<(), AppError>),
+    SeriesLoaded(SeriesKey, Result<Loaded, MarketError>),
+    OlderLoaded(SeriesKey, Result<Loaded, MarketError>),
+    CandleSaved(SeriesKey, Result<(), MarketError>),
     Tick,
 }
 
 impl Fitil {
     fn new() -> (Self, Task<Message>) {
-        let clients: HashMap<_, _> = Market::ALL
-            .into_iter()
-            .map(|market| {
-                let client = BinanceClient::new(market).expect("the HTTP client can be created");
-                (market, Arc::new(client))
+        let exchanges = exchanges();
+        let markets: BTreeMap<Market, MarketState> = exchanges
+            .iter()
+            .flat_map(|exchange| {
+                exchange.markets().iter().map(|&kind| Market {
+                    exchange: exchange.id(),
+                    kind,
+                })
             })
-            .collect();
-        let markets = Market::ALL
-            .into_iter()
             .map(|market| {
                 let state = MarketState {
                     load: Load::Loading,
-                    symbols: HashMap::new(),
-                    tickers: HashMap::new(),
+                    board: Board::default(),
                     feed: None,
                     connection: Connection::Connecting,
                 };
                 (market, state)
             })
             .collect();
+        let market = *markets.keys().next().expect("every exchange has a market");
         let app = Self {
             translations: Translations::new(Language::from_system()),
-            store: data::open_store(),
-            clients,
+            cache: storage::open_cache(),
+            exchanges,
             markets,
-            market: Market::Spot,
+            market,
             search: String::new(),
             selection: None,
             chart_kind: ChartKind::default(),
             price_scale: PriceScale::default(),
             pending_open: OpenRequest::from_args(std::env::args()),
         };
-        let loads = Market::ALL.map(|market| app.load_market(market));
+        let loads: Vec<_> = app
+            .markets
+            .keys()
+            .map(|&market| app.load_market(market))
+            .collect();
         (app, Task::batch(loads))
     }
 
@@ -241,10 +238,17 @@ impl Fitil {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        let feeds = Market::ALL
-            .into_iter()
-            .filter(|market| matches!(self.markets[market].load, Load::Ready))
-            .map(|market| Subscription::run_with(market, live_feed));
+        let feeds = self
+            .markets
+            .iter()
+            .filter(|(_, state)| matches!(state.load, Load::Ready))
+            .map(|(&market, _)| {
+                let source = feed::Source {
+                    market,
+                    exchange: self.exchange(market.exchange),
+                };
+                Subscription::run_with(source, feed::run)
+            });
         let clock = iced::time::every(Duration::from_secs(1)).map(|_| Message::Tick);
         Subscription::batch(feeds.chain([clock]))
     }
@@ -254,10 +258,19 @@ impl Fitil {
             Message::LanguageSelected(language) => {
                 self.translations = Translations::new(language);
                 if let Some(selection) = &mut self.selection {
-                    let title =
-                        chart_title(&self.translations, &selection.symbol, selection.timeframe);
+                    let title = chart_title(
+                        &self.translations,
+                        self.exchanges.as_slice(),
+                        &selection.symbol,
+                        selection.series.target(),
+                    );
                     selection.chart.set_title(title);
                     selection.chart.set_labels(chart_labels(&self.translations));
+                }
+            }
+            Message::ExchangeSelected(exchange) => {
+                if let Some(&market) = self.markets.keys().find(|m| m.exchange == exchange) {
+                    self.market = market;
                 }
             }
             Message::MarketSelected(market) => self.market = market,
@@ -266,24 +279,14 @@ impl Fitil {
                 let state = self.market_mut(market);
                 match result {
                     Ok(snapshot) => {
-                        state.symbols = snapshot
-                            .symbols
-                            .into_iter()
-                            .map(|symbol| (symbol.name.clone(), symbol))
-                            .collect();
-                        state.tickers = snapshot
-                            .tickers
-                            .into_iter()
-                            .filter(|ticker| state.symbols.contains_key(&ticker.symbol))
-                            .map(|ticker| (ticker.symbol.clone(), ticker))
-                            .collect();
+                        state.board = Board::new(snapshot);
                         state.load = Load::Ready;
-                        if let Some(request) = self.pending_open.take_if(|r| r.market == market) {
+                        if let Some(request) = self.pending_open.take_if(|r| r.matches(market)) {
                             self.market = market;
                             return self.select(market, &request.symbol, request.timeframe);
                         }
                     }
-                    Err(error) => state.load = Load::Failed(error),
+                    Err(error) => state.load = Load::Failed(error.into()),
                 }
             }
             Message::RetryMarket(market) => {
@@ -303,7 +306,7 @@ impl Fitil {
             Message::SymbolSelected(market, name) => {
                 let timeframe = self.selection.as_ref().map_or_else(
                     || DEFAULT_TIMEFRAME.parse().expect("valid default"),
-                    |selection| selection.timeframe,
+                    |selection| selection.series.target(),
                 );
                 return self.select(market, &name, timeframe);
             }
@@ -337,64 +340,38 @@ impl Fitil {
                 return self.load_older_if_needed();
             }
             Message::SeriesLoaded(key, result) => {
-                if let Some(selection) = &mut self.selection
-                    && selection.key() == key
-                {
-                    selection.loading = false;
-                    match result {
-                        Ok(loaded) => {
-                            merge_newest(selection, loaded);
-                            selection.error = None;
-                            selection.refresh_chart();
-                            return self.load_older_if_needed();
-                        }
-                        Err(error) => selection.error = Some(error),
+                if let Some(selection) = self.selection_of(&key) {
+                    match selection.series.finish_load(result) {
+                        Ok(()) => selection.error = None,
+                        Err(error) => selection.error = Some(error.into()),
                     }
+                    selection.refresh_chart();
+                    return self.load_older_if_needed();
                 }
             }
             Message::OlderLoaded(key, result) => {
-                if let Some(selection) = &mut self.selection
-                    && selection.key() == key
-                {
-                    selection.loading_older = false;
-                    match result {
-                        Ok(older) => {
-                            let connects = match (older.candles.last(), selection.candles.first()) {
-                                (Some(last), Some(first)) => {
-                                    selection.source.next_bucket(last.open_time) == first.open_time
-                                }
-                                _ => false,
-                            };
-                            if connects {
-                                let mut candles = older.candles;
-                                candles.append(&mut selection.candles);
-                                selection.candles = candles;
-                            }
-                            selection.complete = older.complete;
-                            selection.cached = older.cached;
-                            selection.error = None;
-                            selection.refresh_chart();
-                            return self.load_older_if_needed();
-                        }
-                        Err(error) => {
-                            selection.error = Some(error);
-                            selection.chart.set_loading_older(false);
-                        }
+                if let Some(selection) = self.selection_of(&key) {
+                    match selection.series.finish_load_older(result) {
+                        Ok(()) => selection.error = None,
+                        Err(error) => selection.error = Some(error.into()),
                     }
+                    selection.refresh_chart();
+                    return self.load_older_if_needed();
                 }
             }
             Message::CandleSaved(key, result) => {
                 if let Err(error) = result
-                    && let Some(selection) = &mut self.selection
-                    && selection.key() == key
+                    && let Some(selection) = self.selection_of(&key)
                 {
-                    selection.error = Some(error);
+                    selection.error = Some(error.into());
                 }
             }
             Message::Tick => {
-                if let Some(selection) = &mut self.selection {
-                    let now = self.clients[&selection.symbol.market].now();
-                    selection.chart.set_now(now);
+                if let Some(selection) = &self.selection {
+                    let now = self.exchange(selection.symbol.market.exchange).now();
+                    if let Some(selection) = &mut self.selection {
+                        selection.chart.set_now(now);
+                    }
                 }
             }
         }
@@ -420,14 +397,7 @@ impl Fitil {
             FeedEvent::Reconnecting { attempt, delay } => {
                 self.market_mut(market).connection = Connection::Reconnecting { attempt, delay };
             }
-            FeedEvent::Tickers(tickers) => {
-                let state = self.market_mut(market);
-                for ticker in tickers {
-                    if state.symbols.contains_key(&ticker.symbol) {
-                        state.tickers.insert(ticker.symbol.clone(), ticker);
-                    }
-                }
-            }
+            FeedEvent::Tickers(tickers) => self.market_mut(market).board.update(tickers),
             FeedEvent::Candle {
                 symbol,
                 timeframe,
@@ -449,51 +419,36 @@ impl Fitil {
         let Some(selection) = &mut self.selection else {
             return Task::none();
         };
-        if selection.symbol.market != market
-            || selection.symbol.name != symbol
-            || selection.source != timeframe
-        {
+        if selection.symbol.market != market || !selection.series.is_fed_by(symbol, timeframe) {
             return Task::none();
         }
-        if !closed {
-            selection.live = Some(candle);
-            selection.refresh_chart();
-            return Task::none();
+        match selection.series.apply_live(candle, closed) {
+            LiveUpdate::Changed => {
+                selection.refresh_chart();
+                Task::none()
+            }
+            LiveUpdate::Closed(candle) => {
+                selection.refresh_chart();
+                let Ok(cache) = &self.cache else {
+                    return Task::none();
+                };
+                let key = selection.series.key().clone();
+                Task::perform(
+                    fitil_market::save_candle(cache.clone(), key.clone(), candle),
+                    move |result| Message::CandleSaved(key.clone(), result),
+                )
+            }
+            LiveUpdate::Reload => self.open_series(),
         }
-        selection.live = None;
-
-        // While a load is running, it will pick this candle up itself.
-        let Some(last) = selection.candles.last().filter(|_| !selection.loading) else {
-            return Task::none();
-        };
-        if candle.open_time <= last.open_time {
-            return Task::none();
-        }
-        if timeframe.next_bucket(last.open_time) != candle.open_time {
-            // Candles were missed; fill the gap from the exchange.
-            return self.open_series();
-        }
-
-        selection.candles.push(candle);
-        selection.cached += 1;
-        selection.refresh_chart();
-        let Ok(store) = &self.store else {
-            return Task::none();
-        };
-        let key = selection.key();
-        Task::perform(
-            data::save_candle(store.clone(), key.clone(), candle),
-            move |result| Message::CandleSaved(key.clone(), result),
-        )
     }
 
-    /// Shows `name` from `market` in `timeframe`, or the default timeframe if `market`
-    /// cannot provide it.
+    /// Shows `name` from `market` in `timeframe`, or the default timeframe if the
+    /// exchange cannot provide it.
     fn select(&mut self, market: Market, name: &str, timeframe: Timeframe) -> Task<Message> {
-        let Some(symbol) = self.markets[&market].symbols.get(name).cloned() else {
+        let Some(symbol) = self.markets[&market].board.symbol(name).cloned() else {
             return Task::none();
         };
-        let natives = binance::native_timeframes(market);
+        let natives = self.exchange(market.exchange).timeframes(market.kind);
         let (timeframe, source) = match timeframe.best_source(natives) {
             Some(source) => (timeframe, source),
             None => {
@@ -503,13 +458,18 @@ impl Fitil {
         };
         if let Some(current) = &self.selection
             && current.symbol == symbol
-            && current.timeframe == timeframe
+            && current.series.target() == timeframe
         {
             return Task::none();
         }
 
+        let key = SeriesKey {
+            market,
+            symbol: symbol.name.clone(),
+            timeframe: source,
+        };
         let chart = Chart::new(
-            chart_title(&self.translations, &symbol, timeframe),
+            chart_title(&self.translations, &self.exchanges, &symbol, timeframe),
             timeframe,
             symbol.price_decimals,
             self.chart_kind,
@@ -518,20 +478,13 @@ impl Fitil {
         );
         let selection = Selection {
             symbol,
-            timeframe,
-            source,
-            loading: false,
-            loading_older: false,
-            candles: Vec::new(),
-            live: None,
-            complete: false,
-            cached: 0,
-            error: None,
+            series: Series::new(key, timeframe),
             chart,
+            error: None,
         };
         let topic = selection.topic();
         if let Some(previous) = self.selection.take()
-            && previous.topic() != topic
+            && (previous.symbol.market != market || previous.topic() != topic)
         {
             self.send(
                 previous.symbol.market,
@@ -543,49 +496,52 @@ impl Fitil {
         self.open_series()
     }
 
-    /// Loads the newest candles of the selected series, from the cache and the exchange.
+    /// Loads the newest candles of the selected series, unless they are loading already.
     fn open_series(&mut self) -> Task<Message> {
         let Some(selection) = &mut self.selection else {
             return Task::none();
         };
-        let store = match &self.store {
-            Ok(store) => store.clone(),
+        let cache = match &self.cache {
+            Ok(cache) => cache.clone(),
             Err(error) => {
                 selection.error = Some(error.clone());
                 return Task::none();
             }
         };
-        selection.loading = true;
-        let client = self.clients[&selection.symbol.market].clone();
-        let key = selection.key();
+        if !selection.series.begin_load() {
+            return Task::none();
+        }
+        let exchange = find_exchange(&self.exchanges, selection.symbol.market.exchange);
+        let key = selection.series.key().clone();
         Task::perform(
-            data::open_series(client, store, key.clone(), selection.timeframe),
+            fitil_market::open_series(exchange, cache, key.clone(), selection.series.target()),
             move |result| Message::SeriesLoaded(key.clone(), result),
         )
     }
 
-    /// Loads older candles when the chart has been moved close to the oldest one.
+    /// Loads older candles once the chart has been moved close to the oldest one.
     fn load_older_if_needed(&mut self) -> Task<Message> {
         let Some(selection) = &mut self.selection else {
             return Task::none();
         };
-        if selection.loading || selection.loading_older || !selection.chart.wants_older() {
-            return Task::none();
-        }
-        let (Some(first), Ok(store)) = (selection.candles.first(), &self.store) else {
+        let Ok(cache) = &self.cache else {
             return Task::none();
         };
-        let before = first.open_time;
-        selection.loading_older = true;
+        if !selection.chart.wants_older() {
+            return Task::none();
+        }
+        let Some(before) = selection.series.begin_load_older() else {
+            return Task::none();
+        };
         selection.chart.set_loading_older(true);
-        let client = self.clients[&selection.symbol.market].clone();
-        let key = selection.key();
+        let exchange = find_exchange(&self.exchanges, selection.symbol.market.exchange);
+        let key = selection.series.key().clone();
         Task::perform(
-            data::load_older(
-                client,
-                store.clone(),
+            fitil_market::load_older(
+                exchange,
+                cache.clone(),
                 key.clone(),
-                selection.timeframe,
+                selection.series.target(),
                 before,
             ),
             move |result| Message::OlderLoaded(key.clone(), result),
@@ -593,10 +549,23 @@ impl Fitil {
     }
 
     fn load_market(&self, market: Market) -> Task<Message> {
-        let client = self.clients[&market].clone();
-        Task::perform(data::load_market(client), move |result| {
-            Message::MarketLoaded(market, result)
-        })
+        let exchange = self.exchange(market.exchange);
+        Task::perform(
+            fitil_market::load_market(exchange, market.kind),
+            move |result| Message::MarketLoaded(market, result),
+        )
+    }
+
+    /// The selection, if it still shows the series `key` (loads may finish after the
+    /// user has moved on).
+    fn selection_of(&mut self, key: &SeriesKey) -> Option<&mut Selection> {
+        self.selection
+            .as_mut()
+            .filter(|selection| selection.series.key() == key)
+    }
+
+    fn exchange(&self, id: ExchangeId) -> Arc<dyn Exchange> {
+        find_exchange(&self.exchanges, id)
     }
 
     fn send(&self, market: Market, command: FeedCommand) {
@@ -613,47 +582,35 @@ impl Fitil {
     }
 }
 
-/// Puts freshly loaded newest candles into the selection, keeping older candles already
-/// in memory when they connect.
-fn merge_newest(selection: &mut Selection, loaded: Loaded) {
-    // Keep the feed's candle unless the fetched one is newer.
-    if let Some(open) = loaded.open
-        && selection
-            .live
-            .is_none_or(|live| live.open_time < open.open_time)
-    {
-        selection.live = Some(open);
-    }
-    selection.cached = loaded.cached;
-    let Some(first_new) = loaded.candles.first().map(|candle| candle.open_time) else {
-        selection.candles = loaded.candles;
-        selection.complete = loaded.complete;
-        return;
-    };
-    let older: Vec<Candle> = selection
-        .candles
+fn find_exchange(exchanges: &[Arc<dyn Exchange>], id: ExchangeId) -> Arc<dyn Exchange> {
+    exchanges
         .iter()
-        .take_while(|candle| candle.open_time < first_new)
-        .copied()
-        .collect();
-    let connects = older
-        .last()
-        .is_some_and(|last| selection.source.next_bucket(last.open_time) == first_new);
-    if connects {
-        selection.candles = older;
-        selection.candles.extend(loaded.candles);
-    } else {
-        selection.candles = loaded.candles;
-        selection.complete = loaded.complete;
+        .find(|exchange| exchange.id() == id)
+        .cloned()
+        .expect("markets only name registered exchanges")
+}
+
+/// The Fluent key naming a kind of market.
+fn market_key(kind: MarketKind) -> &'static str {
+    match kind {
+        MarketKind::Spot => "market-spot",
+        MarketKind::LinearPerpetual => "market-futures",
     }
 }
 
-fn chart_title(t: &Translations, symbol: &Symbol, timeframe: Timeframe) -> String {
-    let market = match symbol.market {
-        Market::Spot => t.get("market-spot"),
-        Market::UsdMFutures => t.get("market-futures"),
-    };
-    format!("{} · {timeframe} · Binance {market}", symbol.name)
+fn chart_title(
+    t: &Translations,
+    exchanges: &[Arc<dyn Exchange>],
+    symbol: &Symbol,
+    timeframe: Timeframe,
+) -> String {
+    let exchange = find_exchange(exchanges, symbol.market.exchange);
+    format!(
+        "{} · {timeframe} · {} {}",
+        symbol.name,
+        exchange.name(),
+        t.get(market_key(symbol.market.kind))
+    )
 }
 
 fn chart_labels(t: &Translations) -> ChartLabels {
@@ -678,33 +635,6 @@ fn chart_labels(t: &Translations) -> ChartLabels {
     }
 }
 
-/// Runs the live feed for `market`, turning its events into messages.
-fn live_feed(market: &Market) -> impl Stream<Item = Message> + use<> {
-    let market = *market;
-    iced::stream::channel(100, async move |mut output: mpsc::Sender<Message>| {
-        let (commands, command_receiver) = mpsc::unbounded();
-        if output
-            .send(Message::FeedReady(market, commands))
-            .await
-            .is_err()
-        {
-            return;
-        }
-        let (event_sender, mut events) = mpsc::channel(100);
-        let forward = async move {
-            while let Some(event) = events.next().await {
-                if output.send(Message::Feed(market, event)).await.is_err() {
-                    break;
-                }
-            }
-        };
-        futures::join!(
-            binance::run_feed(market, command_receiver, event_sender),
-            forward
-        );
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -716,19 +646,36 @@ mod tests {
     #[test]
     fn open_requests_come_from_the_command_line() {
         assert_eq!(
-            parse(&["fitil", "--open", "futures:ethusdt:4h"]),
+            parse(&["fitil", "--open", "binance:futures:ethusdt:4h"]),
             Some(OpenRequest {
-                market: Market::UsdMFutures,
+                exchange: Some("binance".into()),
+                kind: MarketKind::LinearPerpetual,
                 symbol: "ETHUSDT".into(),
                 timeframe: "4h".parse().unwrap(),
             })
         );
-        assert_eq!(
-            parse(&["fitil", "--open", "spot:BTCUSDT"]).map(|r| r.timeframe.to_string()),
-            Some(DEFAULT_TIMEFRAME.into())
-        );
+        let spot = parse(&["fitil", "--open", "spot:BTCUSDT"]).unwrap();
+        assert_eq!(spot.exchange, None);
+        assert_eq!(spot.timeframe.to_string(), DEFAULT_TIMEFRAME);
         assert_eq!(parse(&["fitil"]), None);
-        assert_eq!(parse(&["fitil", "--open", "margin:BTCUSDT"]), None);
+        assert_eq!(parse(&["fitil", "--open", "binance:margin:BTCUSDT"]), None);
         assert_eq!(parse(&["fitil", "--open", "spot:BTCUSDT:7x"]), None);
+    }
+
+    #[test]
+    fn open_requests_match_markets() {
+        let binance_spot = Market {
+            exchange: ExchangeId::new("binance"),
+            kind: MarketKind::Spot,
+        };
+        let okx_spot = Market {
+            exchange: ExchangeId::new("okx"),
+            ..binance_spot
+        };
+        let any = parse(&["fitil", "--open", "spot:BTCUSDT"]).unwrap();
+        assert!(any.matches(binance_spot) && any.matches(okx_spot));
+        let okx = parse(&["fitil", "--open", "okx:spot:BTC-USDT"]).unwrap();
+        assert!(okx.matches(okx_spot) && !okx.matches(binance_spot));
+        assert_eq!(okx.symbol, "BTC-USDT");
     }
 }

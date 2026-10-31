@@ -1,13 +1,13 @@
 # Captures a screenshot of the running Fitil window (Windows only).
 # Works even when the window is behind others, and never takes focus from the user:
-#   scripts/capture-window.ps1 -OutFile shot.png
+#   scripts/capture-window.ps1 -OutFile shot.png [-ProcessId 1234]
 
-param([string]$ProcessName = "fitil", [string]$OutFile)
+param([string]$ProcessName = "fitil", [string]$OutFile, [int]$ProcessId = 0)
 
 Add-Type -AssemblyName System.Drawing
 . "$PSScriptRoot\window-helpers.ps1"
 
-$window = Find-FitilWindow $ProcessName
+$window = Find-FitilWindow $ProcessName $ProcessId
 $rect = $window.Rect
 $width = $rect.Right - $rect.Left
 $height = $rect.Bottom - $rect.Top

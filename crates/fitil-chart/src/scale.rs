@@ -357,9 +357,9 @@ mod tests {
                 low: 1.0,
                 close: 1.0,
                 volume: 1.0,
-                quote_volume: 1.0,
-                trades: 1,
-                taker_buy_volume: 0.5,
+                quote_volume: Some(1.0),
+                trades: Some(1),
+                taker_buy_volume: Some(0.5),
             })
             .collect()
     }

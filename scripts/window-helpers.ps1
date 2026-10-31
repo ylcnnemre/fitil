@@ -26,9 +26,14 @@ public static class FitilWindow {
 
 [FitilWindow]::SetProcessDPIAware() | Out-Null
 
-# The largest visible window of the process, with its screen rectangle.
-function Find-FitilWindow([string]$ProcessName) {
-    $process = Get-Process $ProcessName -ErrorAction Stop | Select-Object -First 1
+# The largest visible window of the process, with its screen rectangle. A process id
+# picks one Fitil when several are running.
+function Find-FitilWindow([string]$ProcessName, [int]$ProcessId = 0) {
+    $process = if ($ProcessId) {
+        Get-Process -Id $ProcessId -ErrorAction Stop
+    } else {
+        Get-Process $ProcessName -ErrorAction Stop | Select-Object -First 1
+    }
     $best = $null
     foreach ($handle in [FitilWindow]::WindowsOf([uint32]$process.Id)) {
         $rect = New-Object FitilWindow+RECT

@@ -896,9 +896,11 @@ name = "fitil-app"
 version = "0.1.0"
 dependencies = [
  "directories",
+ "fitil-binance",
  "fitil-chart",
  "fitil-core",
  "fitil-exchange",
+ "fitil-market",
  "fitil-store",
  "fluent-bundle",
  "futures",
@@ -906,6 +908,20 @@ dependencies = [
  "sys-locale",
  "tokio",
  "unic-langid",
+]
+
+[[package]]
+name = "fitil-binance"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "fitil-core",
+ "fitil-exchange",
+ "futures",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -925,11 +941,11 @@ version = "0.1.0"
 name = "fitil-exchange"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "fitil-core",
  "futures",
  "reqwest",
  "rustls",
- "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
@@ -939,6 +955,19 @@ dependencies = [
 [[package]]
 name = "fitil-indicators"
 version = "0.1.0"
+
+[[package]]
+name = "fitil-market"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "fitil-core",
+ "fitil-exchange",
+ "fitil-store",
+ "futures",
+ "thiserror 2.0.21",
+ "tokio",
+]
 
 [[package]]
 name = "fitil-store"

@@ -25,7 +25,13 @@ Claude ekranı doğrudan göremez. Arayüzde bir değişiklikten sonra:
 
 **Tıklama yok:** iced, PostMessage ile gönderilen tıklamaları kabul etmiyor. Bu yüzden tıklama gerektiren akışları proje sahibi dener. Mantık birim testleri ve canlı testlerle doğrulanır.
 
-**Grafik açarak test:** `Start-Process target\debug\fitil.exe -ArgumentList "--open","futures:ETHUSDT:45m"` grafiği tıklamadan açar.
+**Grafik açarak test:** `Start-Process target\debug\fitil.exe -ArgumentList "--open","binance:futures:ETHUSDT:45m"` grafiği tıklamadan açar. Biçim `[borsa:]piyasa:SEMBOL[:zaman dilimi]`, piyasa `spot` ya da `futures`.
+
+**Kullanıcının penceresi açıkken test etmek:**
+- `target\debug\fitil.exe` çalışırken `cargo build` ve `cargo test` dosyanın üzerine yazamaz.
+- Pencereyi kapatmak yerine ayrı bir klasöre derle: `CARGO_TARGET_DIR=target/verify cargo test --workspace`. İlk derleme birkaç dakika sürer.
+- Yeni sürümü kullanıcının önbelleğine dokunmadan açmak için önbelleği bir kopyaya yönlendir: `FITIL_DATA_DIR=<klasör>`. Eski sürüm açıkken yeni sürüm aynı dosyada göç (migration) çalıştırırsa eski sürüm hata verir.
+- Test için açılan süreç `Start-Process -PassThru` ile alınan Id üzerinden kapatılır. Görüntü almak için `capture-window.ps1 -ProcessId <id>` kullanılır.
 
 **Açık pencereye dikkat:** Proje sahibi o sırada uygulamayı kullanıyor olabilir. Ekran görüntüsünde imleç veya değişmiş bir görünüm varsa `fitil` sürecini kapatmadan önce sor ya da yeniden başlatmadan doğrula.
 
@@ -70,19 +76,29 @@ cargo deny check                  # bağımlılıkların lisans ve güvenlik kon
 
 ## Proje yapısı
 
-Bir Cargo workspace olarak kuruldu, ayrıntısı `docs/TASARIM.md` §6.1'de.
+Mimari "port ve adaptör" (hexagonal) düzenindedir. Kurallar ve bağımlılık tablosu `docs/TASARIM.md` §6'da, klasör yapısı §6.4'te.
 
-| Crate | Görevi |
-|---|---|
-| `crates/fitil-core` | Ortak veri tipleri |
-| `crates/fitil-exchange` | Borsa adaptörleri |
-| `crates/fitil-store` | SQLite |
-| `crates/fitil-indicators` | İndikatör hesaplamaları |
-| `crates/fitil-chart` | Grafik motoru (iced Canvas, sıfırdan yazıldı) |
-| `crates/fitil-app` | Uygulamanın kendisi, iced arayüzü |
-| `locales/<dil>/fitil.ftl` | Arayüz metinleri |
+| Crate | Görevi | İçerik |
+|---|---|---|
+| `fitil-core` | Alan modeli | `Candle` (`quote_volume`, `trades`, `taker_buy_volume` alanları `Option`), `ExchangeId`, `MarketKind` (Spot, LinearPerpetual), `Market` (= borsa + tür), `Symbol`, `Ticker`, `SeriesKey`, `Timeframe`, `aggregate`, `aggregate_whole` |
+| `fitil-exchange` | Borsa arayüzü ve ortak araçlar | `Exchange` trait (async-trait), `CandleQuery` (Latest/From/Until), `Features`, `RequestUsage`, `ExchangeError` (Clone), feed tipleri (`Topic`, `FeedCommand`, `FeedEvent`), `stream::run_stream` ve `StreamProtocol`, `RateLimiter` (pencere süresi ayarlanır), `Clock`, `http_client()` |
+| `fitil-binance` | Binance adaptörü | `rest.rs` (piyasa başına REST istemcisi, istek ağırlığı), `stream.rs` (`BinanceStream` protokolü), `wire.rs` (JSON). Kayıtlı yanıtlar `tests/fixtures/binance/`'te. |
+| `fitil-store` | SQLite | Göç 1 (ilk şema), göç 2 (anahtara `exchange` eklendi, isteğe bağlı alanlar NULL olabilir, `usdm` → `perp`) |
+| `fitil-market` | Uygulama katmanı | `loader.rs` (`open_series`, `load_older`, `save_candle`), `series.rs` (`Series`: bellekteki mumlar, canlı mum, `LiveUpdate`), `board.rs` (`Board`: fiyat listesi, dolar hacmine göre sıralama, `load_market`), `fake.rs` (testler için sahte borsa) |
+| `fitil-indicators` | İndikatör hesapları | Şimdilik boş, Adım 4'te dolacak |
+| `fitil-chart` | Grafik bileşeni | iced Canvas üzerinde, sıfırdan yazıldı |
+| `fitil-app` | Pencere ve ekranlar | `main.rs` (durum, mesajlar, `exchanges()` borsa listesi, `--open`), `view.rs`, `feed.rs` (canlı veri aboneliği), `storage.rs`, `error.rs`, `format.rs`, `i18n.rs` |
+| `locales/<dil>/fitil.ftl` | Arayüz metinleri | |
 
-Yeni bir dil eklemek için `locales/` altına yeni bir klasör açılır, dosya çevrilir ve dil kodu `fitil-app` içindeki dil listesine eklenir.
+**Yeni dil:** `locales/` altına yeni bir klasör açılır, dosya çevrilir ve dil kodu `fitil-app/src/i18n.rs` içindeki dil listesine eklenir.
+
+**Yeni borsa** (`docs/TASARIM.md` §6.3):
+1. `crates/fitil-<borsa>` açılır ve `fitil_exchange::Exchange` uygulanır. Canlı veri için `StreamProtocol` yazılır, yeniden bağlanma döngüsü ortaktır.
+2. Kayıtlı yanıtlarla testler ve `--ignored` canlı testler eklenir.
+3. `fitil-app/src/main.rs` içindeki `exchanges()` listesine eklenir.
+4. Workspace `Cargo.toml` dosyasına ve `fitil-app` bağımlılıklarına eklenir.
+
+**Bağımlılık kuralı:** `fitil-market` hiçbir adaptörü tanımaz. Adaptörler `fitil-market`'i tanımaz. Uygulama hepsini birbirine bağlar.
 
 ## Kullanılan kütüphane sürümleri
 
