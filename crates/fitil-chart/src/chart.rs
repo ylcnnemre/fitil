@@ -1,10 +1,11 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 
-use fitil_core::{Candle, Timeframe};
+use fitil_core::{Anchor, Candle, Drawing, DrawingKind, Timeframe};
 use iced::widget::canvas;
 use iced::{Element, Fill};
 
+use crate::drawings::Draft;
 use crate::study::{Study, StudyPlacement};
 
 /// Shares of the height given to the price pane and to each new indicator pane: one
@@ -71,12 +72,19 @@ pub struct ChartLabels {
     pub magnitudes: [String; 3],
     /// Suffix for days in a countdown, like the `d` in `2d 03:00:00`.
     pub day_suffix: String,
+    /// Suffixes for hours and minutes in a duration, like the `h` and `m` in `5h 30m`.
+    pub hour_suffix: String,
+    pub minute_suffix: String,
     /// Shown while older candles load.
     pub loading: String,
+    /// The words of a new note.
+    pub note: String,
+    /// Follows a number of candles, as in `42 bars`.
+    pub bars: String,
 }
 
 /// What the user did on the chart, in chart terms.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ChartMessage {
     /// Dragging the plot. Positive `bars` reveals older candles; `price` moves the price
     /// range by that fraction of its height.
@@ -93,6 +101,18 @@ pub enum ChartMessage {
     /// Moves the edge above indicator pane `index` (0 is the topmost) down by `pixels`,
     /// or up when negative.
     MoveDivider { index: usize, pixels: f64 },
+    /// A point placed with the drawing tool.
+    PlacePoint(Anchor),
+    /// Where the drawing tool's next point would go: under the cursor.
+    PreviewPoint(Anchor),
+    /// A click that picked a drawing, or none.
+    SelectDrawing(Option<u64>),
+    /// A drawing dragged to new points.
+    MoveDrawing { id: u64, points: Vec<Anchor> },
+    /// The end of a drag of a drawing.
+    FinishMove,
+    /// Drops the drawing being placed, or else the tool, or else the selection.
+    Cancel,
 }
 
 /// A candle chart for one series.
@@ -124,6 +144,23 @@ pub struct Chart {
     /// kept for studies that are gone, so a pane shown again keeps its height.
     price_weight: f64,
     pane_weights: BTreeMap<u64, f64>,
+    /// The symbol's drawings, and what is being done with them.
+    pub(crate) drawings: Vec<Drawing>,
+    pub(crate) selected: Option<u64>,
+    /// The drawing tool in use; without one, clicks pick drawings.
+    pub(crate) tool: Option<DrawingKind>,
+    /// A drawing being placed, point by point.
+    pub(crate) draft: Option<Draft>,
+    /// Points placed or dragged stick to the nearest price of the nearest candle.
+    pub(crate) magnet: bool,
+    pub(crate) drawings_hidden: bool,
+    /// The drawings before each change, to undo it, and after each undo, to redo it.
+    pub(crate) undo: Vec<Vec<Drawing>>,
+    pub(crate) redo: Vec<Vec<Drawing>>,
+    /// A drawing is being dragged; its points before the drag are on `undo`.
+    pub(crate) moving: bool,
+    /// The drawings changed since they were last handed out to be saved.
+    pub(crate) unsaved: bool,
     /// Plot width, shown price range and height of all panes as of the last draw.
     pub(crate) plot_width: Cell<f64>,
     pub(crate) shown_range: Cell<Option<(f64, f64)>>,
@@ -159,6 +196,16 @@ impl Chart {
             show_volume: true,
             price_weight: PRICE_PANE_WEIGHT,
             pane_weights: BTreeMap::new(),
+            drawings: Vec::new(),
+            selected: None,
+            tool: None,
+            draft: None,
+            magnet: false,
+            drawings_hidden: false,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            moving: false,
+            unsaved: false,
             plot_width: Cell::new(800.0),
             shown_range: Cell::new(None),
             panes_height: Cell::new(600.0),
@@ -209,6 +256,7 @@ impl Chart {
         self.price_range = None;
         self.loading_older = false;
         self.history_complete = false;
+        self.draft = None;
         self.shown_range.set(None);
         self.cache.clear();
     }
@@ -343,6 +391,23 @@ impl Chart {
                 self.right = self.raw.len() as f64 - 1.0 + RIGHT_MARGIN;
             }
             ChartMessage::MoveDivider { index, pixels } => self.move_divider(index, pixels),
+            // Drawings are drawn on every frame, so changing them redraws nothing else.
+            ChartMessage::PlacePoint(anchor) => return self.place_point(anchor),
+            ChartMessage::PreviewPoint(anchor) => {
+                if let Some(draft) = &mut self.draft {
+                    draft.next = Some(anchor);
+                }
+                return;
+            }
+            ChartMessage::SelectDrawing(id) => return self.selected = id,
+            ChartMessage::MoveDrawing { id, points } => return self.move_drawing(id, points),
+            ChartMessage::FinishMove => {
+                if std::mem::take(&mut self.moving) {
+                    self.unsaved = true;
+                }
+                return;
+            }
+            ChartMessage::Cancel => return self.cancel(),
         }
         self.clamp();
         self.cache.clear();
@@ -413,7 +478,11 @@ mod tests {
             months: std::array::from_fn(|i| format!("M{}", i + 1)),
             magnitudes: ["K", "M", "B"].map(String::from),
             day_suffix: "d".into(),
+            hour_suffix: "h".into(),
+            minute_suffix: "m".into(),
             loading: "…".into(),
+            note: "Note".into(),
+            bars: "bars".into(),
         }
     }
 

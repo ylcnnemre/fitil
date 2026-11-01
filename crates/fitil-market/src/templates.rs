@@ -11,6 +11,20 @@ use crate::MarketError;
 
 pub type SharedUserData = Arc<Mutex<UserData>>;
 
+/// Runs `operation` on the user data away from the async threads.
+pub(crate) async fn with_user<T: Send + 'static>(
+    user: SharedUserData,
+    operation: impl FnOnce(&mut UserData) -> fitil_store::Result<T> + Send + 'static,
+) -> Result<T, MarketError> {
+    tokio::task::spawn_blocking(move || {
+        let mut user = user.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        operation(&mut user)
+    })
+    .await
+    .map_err(|error| MarketError::Storage(error.to_string()))?
+    .map_err(MarketError::from)
+}
+
 /// The longest template name, in characters.
 pub const TEMPLATE_NAME_MAX: usize = 60;
 
@@ -75,7 +89,8 @@ impl Template {
 
 /// Every saved template, by name.
 pub async fn load_templates(user: SharedUserData) -> Result<Vec<Template>, MarketError> {
-    with_user(user, |user| user.indicator_templates()).await
+    let stored = with_user(user, |user| user.indicator_templates()).await?;
+    Ok(decode_all(stored))
 }
 
 /// Saves a template, replacing any with the same name, and returns every template.
@@ -84,11 +99,12 @@ pub async fn save_template(
     template: Template,
 ) -> Result<Vec<Template>, MarketError> {
     let stored = template.encode();
-    with_user(user, move |user| {
+    let all = with_user(user, move |user| {
         user.save_indicator_template(&stored)?;
         user.indicator_templates()
     })
-    .await
+    .await?;
+    Ok(decode_all(all))
 }
 
 /// Deletes a template and returns the ones left.
@@ -96,26 +112,16 @@ pub async fn delete_template(
     user: SharedUserData,
     name: String,
 ) -> Result<Vec<Template>, MarketError> {
-    with_user(user, move |user| {
+    let left = with_user(user, move |user| {
         user.delete_indicator_template(&name)?;
         user.indicator_templates()
     })
-    .await
+    .await?;
+    Ok(decode_all(left))
 }
 
-/// Runs `operation` on the user data away from the async threads, and reads the
-/// templates it returns.
-async fn with_user(
-    user: SharedUserData,
-    operation: impl FnOnce(&mut UserData) -> fitil_store::Result<Vec<StoredTemplate>> + Send + 'static,
-) -> Result<Vec<Template>, MarketError> {
-    let stored = tokio::task::spawn_blocking(move || {
-        let mut user = user.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        operation(&mut user)
-    })
-    .await
-    .map_err(|error| MarketError::Storage(error.to_string()))??;
-    Ok(stored.into_iter().map(Template::decode).collect())
+fn decode_all(stored: Vec<StoredTemplate>) -> Vec<Template> {
+    stored.into_iter().map(Template::decode).collect()
 }
 
 #[cfg(test)]

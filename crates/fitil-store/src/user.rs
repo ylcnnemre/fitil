@@ -2,7 +2,8 @@
 
 use std::path::Path;
 
-use rusqlite::{Connection, params};
+use fitil_core::Market;
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::{Result, migrate, open_file};
 
@@ -14,6 +15,17 @@ const MIGRATIONS: &[&str] = &[
     CREATE TABLE indicator_templates (
         name TEXT PRIMARY KEY,
         body TEXT NOT NULL
+    ) WITHOUT ROWID;
+    ",
+    // 2: the drawings of each symbol, all of a symbol's in one body written by the
+    // application layer.
+    "
+    CREATE TABLE drawings (
+        exchange TEXT NOT NULL,
+        market TEXT NOT NULL,
+        symbol TEXT NOT NULL,
+        body TEXT NOT NULL,
+        PRIMARY KEY (exchange, market, symbol)
     ) WITHOUT ROWID;
     ",
 ];
@@ -74,6 +86,42 @@ impl UserData {
         )?;
         Ok(())
     }
+
+    /// The drawings of `symbol` in `market`, as written by the application layer.
+    pub fn drawings(&self, market: Market, symbol: &str) -> Result<Option<String>> {
+        let body = self
+            .conn
+            .query_row(
+                "SELECT body FROM drawings WHERE exchange = ?1 AND market = ?2 AND symbol = ?3",
+                params![market.exchange.as_str(), market.kind.id(), symbol],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(body)
+    }
+
+    /// Saves the drawings of `symbol` in `market`, replacing what was there; `None`
+    /// removes them.
+    pub fn save_drawings(
+        &mut self,
+        market: Market,
+        symbol: &str,
+        body: Option<&str>,
+    ) -> Result<()> {
+        let keys = params![market.exchange.as_str(), market.kind.id(), symbol];
+        match body {
+            Some(body) => self.conn.execute(
+                "INSERT OR REPLACE INTO drawings (exchange, market, symbol, body)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![market.exchange.as_str(), market.kind.id(), symbol, body],
+            )?,
+            None => self.conn.execute(
+                "DELETE FROM drawings WHERE exchange = ?1 AND market = ?2 AND symbol = ?3",
+                keys,
+            )?,
+        };
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -132,5 +180,36 @@ mod tests {
         }
         let user = UserData::open(&db.0).unwrap();
         assert_eq!(user.indicator_templates().unwrap(), [template("RSI", "{}")]);
+    }
+
+    #[test]
+    fn drawings_are_kept_per_symbol_and_market() {
+        use fitil_core::{ExchangeId, MarketKind};
+        let spot = Market {
+            exchange: ExchangeId::new("binance"),
+            kind: MarketKind::Spot,
+        };
+        let futures = Market {
+            kind: MarketKind::LinearPerpetual,
+            ..spot
+        };
+        let mut user = UserData::open_in_memory().unwrap();
+        assert_eq!(user.drawings(spot, "BTCUSDT").unwrap(), None);
+
+        user.save_drawings(spot, "BTCUSDT", Some("a")).unwrap();
+        user.save_drawings(spot, "BTCUSDT", Some("b")).unwrap();
+        user.save_drawings(futures, "BTCUSDT", Some("c")).unwrap();
+        assert_eq!(
+            user.drawings(spot, "BTCUSDT").unwrap().as_deref(),
+            Some("b")
+        );
+        assert_eq!(
+            user.drawings(futures, "BTCUSDT").unwrap().as_deref(),
+            Some("c")
+        );
+        assert_eq!(user.drawings(spot, "ETHUSDT").unwrap(), None);
+
+        user.save_drawings(spot, "BTCUSDT", None).unwrap();
+        assert_eq!(user.drawings(spot, "BTCUSDT").unwrap(), None);
     }
 }

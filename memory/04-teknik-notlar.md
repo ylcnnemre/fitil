@@ -85,14 +85,14 @@ Mimari "port ve adaptör" (hexagonal) düzenindedir. Kurallar ve bağımlılık 
 
 | Crate | Görevi | İçerik |
 |---|---|---|
-| `fitil-core` | Alan modeli | `Candle` (`quote_volume`, `trades`, `taker_buy_volume` alanları `Option`), `ExchangeId`, `MarketKind` (Spot, LinearPerpetual), `Market` (= borsa + tür), `Symbol`, `Ticker`, `SeriesKey`, `Timeframe`, `aggregate`, `aggregate_whole` |
+| `fitil-core` | Alan modeli | `Candle` (`quote_volume`, `trades`, `taker_buy_volume` alanları `Option`), `ExchangeId`, `MarketKind` (Spot, LinearPerpetual), `Market` (= borsa + tür), `Symbol`, `Ticker`, `SeriesKey`, `Timeframe`, `aggregate`, `aggregate_whole`, çizim modeli (`drawing.rs`: `Drawing`, `DrawingKind`, `Anchor`, `LineStyle`, `Rgb`, `FIB_LEVELS`) |
 | `fitil-exchange` | Borsa arayüzü ve ortak araçlar | `Exchange` trait (async-trait), `CandleQuery` (Latest/From/Until), `Features`, `RequestUsage`, `ExchangeError` (Clone), feed tipleri (`Topic`, `FeedCommand`, `FeedEvent`), `stream::run_stream` ve `StreamProtocol`, `RateLimiter` (pencere süresi ayarlanır), `Clock`, `http_client()` |
 | `fitil-binance` | Binance adaptörü | `rest.rs` (piyasa başına REST istemcisi, istek ağırlığı), `stream.rs` (`BinanceStream` protokolü), `wire.rs` (JSON). Kayıtlı yanıtlar `tests/fixtures/binance/`'te. |
-| `fitil-store` | SQLite, iki dosya | `Store` = `cache.sqlite` (göç 1 ilk şema, göç 2 anahtara `exchange`, isteğe bağlı alanlar NULL, `usdm` → `perp`). `UserData` = `user.sqlite` (göç 1: `indicator_templates`). Göç kodu ortak: `migrate(conn, MIGRATIONS)`. |
-| `fitil-market` | Uygulama katmanı | `loader.rs` (`open_series`, `load_older`, `save_candle`), `series.rs` (`Series`: bellekteki mumlar, canlı mum, `LiveUpdate`), `board.rs` (`Board`: semboller ve 24 saatlik verileri; `search`, `search_markets`, `default_symbol`, `load_market`), `studies.rs` (`Studies`, `StudyId`, `is_available`), `templates.rs` (`Template`, `load/save/delete_template`, `SharedUserData`), `fake.rs` (testler için sahte borsa) |
+| `fitil-store` | SQLite, iki dosya | `Store` = `cache.sqlite` (göç 1 ilk şema, göç 2 anahtara `exchange`, isteğe bağlı alanlar NULL, `usdm` → `perp`). `UserData` = `user.sqlite` (göç 1: `indicator_templates`, göç 2: `drawings`, sembol başına bir JSON). Göç kodu ortak: `migrate(conn, MIGRATIONS)`. |
+| `fitil-market` | Uygulama katmanı | `loader.rs` (`open_series`, `load_older`, `save_candle`), `series.rs` (`Series`: bellekteki mumlar, canlı mum, `LiveUpdate`), `board.rs` (`Board`: semboller ve 24 saatlik verileri; `search`, `search_markets`, `default_symbol`, `load_market`), `studies.rs` (`Studies`, `StudyId`, `is_available`), `drawings.rs` (`load_drawings`, `save_drawings`), `templates.rs` (ortak `with_user`, `Template`, `load/save/delete_template`, `SharedUserData`), `fake.rs` (testler için sahte borsa) |
 | `fitil-indicators` | İndikatör hesapları | `primitives.rs` (Sma, Ema, Wma, Deviation…), `indicators/` (22 indikatör), `catalog.rs` (`Definition`, `catalog()`, `definition(id)`), `settings.rs` (`Settings`, `Params`, `Rgb`, `PALETTE`), `calculation.rs` (`Calculation`: artımlı hesap) |
-| `fitil-chart` | Grafik bileşeni | iced Canvas üzerinde, sıfırdan yazıldı. `chart.rs` (durum, panel ağırlıkları), `draw.rs` (çizim, yerleşim, fare), `scale.rs`, `study.rs` (grafiğin indikatör modeli) |
-| `fitil-app` | Pencere ve ekranlar | `main.rs` (durum, mesajlar, `exchanges()` borsa listesi, `--open`), `view.rs` (araç çubuğu, grafik alanı, durum çubuğu), `dialogs.rs` (sembol arama, indikatörler, ayarlar), `studies.rs` (indikatör → grafik modeli, etiketler), `feed.rs` (canlı veri aboneliği), `storage.rs` (`cache.sqlite` yerel, `user.sqlite` dolaşan klasörde), `error.rs`, `format.rs`, `i18n.rs` |
+| `fitil-chart` | Grafik bileşeni | iced Canvas üzerinde, sıfırdan yazıldı. `chart.rs` (durum, panel ağırlıkları), `draw.rs` (çizim, yerleşim, fare), `scale.rs`, `study.rs` (grafiğin indikatör modeli), `drawings.rs` (çizim düzenleme, geri al/yinele, zaman ↔ çubuk), `shapes.rs` (çizimlerin ekrandaki hâli, tıklama bulma, mıknatıs) |
+| `fitil-app` | Pencere ve ekranlar | `main.rs` (durum, mesajlar, `exchanges()` borsa listesi, `--open`), `view.rs` (araç çubuğu, grafik alanı, durum çubuğu), `dialogs.rs` (sembol arama, indikatörler, ayarlar), `studies.rs` (indikatör → grafik modeli, etiketler), `icons.rs` (Lucide simgeleri), `feed.rs` (canlı veri aboneliği), `storage.rs` (`cache.sqlite` yerel, `user.sqlite` dolaşan klasörde), `error.rs`, `format.rs`, `i18n.rs` |
 | `locales/<dil>/fitil.ftl` | Arayüz metinleri | |
 
 **Yeni dil:** `locales/` altına yeni bir klasör açılır, dosya çevrilir ve dil kodu `fitil-app/src/i18n.rs` içindeki dil listesine eklenir.
@@ -164,6 +164,32 @@ Mimari "port ve adaptör" (hexagonal) düzenindedir. Kurallar ve bağımlılık 
 - **İndikatörler:** Grafik `Study` listesi alır (`set_studies`), değerler mumlarla aynı sırada ve uzunlukta olur. `Plot.offset` çizgiyi çubuk sayısı kadar kaydırır (Ichimoku). Gizli indikatörler grafiğe hiç verilmez.
 - **Paneller:** Yükseklik ağırlıkla tutulur: fiyat paneli 3, her yeni panel 1. `ChartMessage::MoveDivider` kenar sürükleyince ağırlık aktarır, panel 30 pikselden küçülmez. Ağırlıklar indikatör kimliğiyle saklanır, gizlenip açılan panel yüksekliğini korur.
 - **Sembol değişince** `replace_series` kullanılır: grafik nesnesi kalır, mumlar ve konum sıfırlanır, yakınlaştırma ve paneller korunur.
+
+## Çizimler
+
+- **Veri:** `fitil_core::Drawing`. Noktalar zaman ve fiyattır (`Anchor`), ekran noktası değil. Grafik `bar_of` / `time_of` ile çubuk konumuna çevirir: mum aralarında oranla, mumların dışında zaman dilimi hızıyla. Böylece çizimler her zaman diliminde doğru yerde durur.
+- **Akış:**
+  - Canvas fare olaylarını `ChartMessage`'a çevirir: `PlacePoint`, `PreviewPoint`, `SelectDrawing`, `MoveDrawing`, `FinishMove`, `Cancel`.
+  - Uygulama bunları `chart.update` ile uygular, sonra `take_changed_drawings` ile değişeni alıp kaydeder.
+  - Ara sürükleme adımları kaydedilmez, bırakınca (`FinishMove`) kaydedilir.
+- **Kayıt sırası:** `DrawingSaves` (`main.rs`) kayıtları teker teker yapar. Biri sürerken gelen aynı sembolün kaydı bekleyenle birleşir. Açılan sembollerin çizimleri `known`'da tutulur, geri dönünce okumadan gösterilir. Geç gelen okuma (`DrawingsLoaded`) yeni değişikliklerin üstüne yazmaz.
+- **Çizim:** Çizimler önbellekli katmana değil, her karede çizilen katmana çizilir. Bu yüzden sürüklerken mumlar yeniden çizilmez. Fiyat ekseni yazıları da bu katmanda; yatay çizgilerin kutuları için yer açılır.
+- **Yeni çizim türü eklemek:**
+  1. `DrawingKind`'e ekle (`points`, `id`).
+  2. `shapes.rs` içindeki `shape` fonksiyonuna nasıl görüneceğini yaz. Tıklama bulma aynı şekli kullanır.
+  3. `icons::for_tool` içine bir Lucide simgesi koy.
+  4. `drawing-<id>` çevirisini iki dile de ekle. Eksikse test yakalar.
+
+## Simgeler (Lucide)
+
+- **Yazı tipi:** `assets/fonts/lucide.ttf` (lucide-static 1.66.0), lisansı `assets/fonts/LICENSE-lucide.txt`.
+  - `main.rs` içinde `.font(icons::FONT_BYTES)` ile yüklenir.
+  - `Font::with_name("lucide")` ile kullanılır.
+- **Yeni simge eklemek:**
+  - Simgenin kod noktası `codepoints.json`'dan bulunur. Dosya: https://cdn.jsdelivr.net/npm/lucide-static@1.66.0/font/codepoints.json
+  - Kod noktası `icons.rs`'e sabit olarak eklenir.
+  - Lucide sürümü değişirse kod noktaları da değişebilir. Yazı tipi ve sabitler birlikte güncellenmeli.
+
 
 ## İndikatörler (`fitil-indicators`)
 

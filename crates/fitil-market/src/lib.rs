@@ -8,6 +8,7 @@
 //! fake exchange and no network.
 
 mod board;
+mod drawings;
 mod loader;
 mod series;
 mod studies;
@@ -17,6 +18,7 @@ mod templates;
 mod fake;
 
 pub use board::{Board, MarketSnapshot, Match, load_market, search_markets};
+pub use drawings::{load_drawings, save_drawings};
 pub use loader::{Loaded, SharedStore, load_older, open_series, save_candle};
 pub use series::{LiveUpdate, Series};
 pub use studies::{Studies, Study, StudyId, is_available};

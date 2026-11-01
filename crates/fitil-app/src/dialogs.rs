@@ -548,7 +548,7 @@ fn settings<'a>(
 }
 
 /// A small square of `rgb` to click; outlined when it is the chosen color.
-fn swatch<'a>(rgb: Rgb, chosen: bool, message: Message) -> Element<'a, Message> {
+pub fn swatch<'a>(rgb: Rgb, chosen: bool, message: Message) -> Element<'a, Message> {
     let fill = studies::color(rgb);
     button(space())
         .width(20)

@@ -10,17 +10,22 @@ mod error;
 mod feed;
 mod format;
 mod i18n;
+mod icons;
 mod storage;
 mod studies;
 mod view;
 
-use std::collections::BTreeMap;
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
 use error::AppError;
 use fitil_chart::{Chart, ChartKind, ChartLabels, ChartMessage, PriceScale};
-use fitil_core::{Candle, ExchangeId, Market, MarketKind, SeriesKey, Symbol, Timeframe};
+use fitil_core::{
+    Candle, Drawing, DrawingKind, ExchangeId, LineStyle, Market, MarketKind, SeriesKey, Symbol,
+    Timeframe,
+};
 use fitil_exchange::{Exchange, Features, FeedCommand, FeedEvent, Topic};
 use fitil_indicators::{Rgb, Settings, Value};
 use fitil_market::{
@@ -38,6 +43,7 @@ fn main() -> iced::Result {
         .title(Fitil::title)
         .theme(Fitil::theme)
         .subscription(Fitil::subscription)
+        .font(icons::FONT_BYTES)
         .window_size((1280.0, 800.0))
         .centered()
         .run()
@@ -81,6 +87,21 @@ struct Fitil {
     dialog: Option<Dialog>,
     /// A chart to open once its market has loaded, from `--open` on the command line.
     pending_open: Option<OpenRequest>,
+    drawings: DrawingSaves,
+    /// Deleting every drawing waits for a second click.
+    confirm_clear: bool,
+    /// Fibonacci levels as typed, until they can be read, with the drawing they are for.
+    levels_text: Option<(u64, String)>,
+}
+
+/// The drawings of the symbols opened, kept in step with the user's data.
+#[derive(Default)]
+struct DrawingSaves {
+    /// The newest drawings of each symbol opened, so that going back to one needs no read.
+    known: HashMap<(Market, String), Vec<Drawing>>,
+    /// A save is running. The next ones wait their turn, so that none can overtake it.
+    saving: bool,
+    waiting: Vec<(Market, String, Vec<Drawing>)>,
 }
 
 /// A window shown over the main screen.
@@ -261,6 +282,27 @@ enum Message {
     DeleteTemplate(String),
     /// The saved templates, after loading, saving or deleting.
     Templates(Result<Vec<Template>, MarketError>),
+    /// Esc: closes a window, or else drops what the chart is in the middle of.
+    Escape,
+    ToolSelected(Option<DrawingKind>),
+    MagnetToggled,
+    DrawingsHiddenToggled,
+    DrawingsLockToggled,
+    /// Deletes every drawing of the symbol, on the second click.
+    ClearDrawings,
+    DrawingColor(Rgb),
+    DrawingWidth(u8),
+    DrawingLine(LineStyle),
+    DrawingText(String),
+    DrawingLevels(String),
+    /// Locks or unlocks the picked drawing.
+    DrawingLockToggled,
+    DuplicateDrawing,
+    DeleteDrawing,
+    Undo,
+    Redo,
+    DrawingsLoaded(Market, String, Result<Vec<Drawing>, MarketError>),
+    DrawingsSaved(Result<(), MarketError>),
 }
 
 impl Fitil {
@@ -300,6 +342,9 @@ impl Fitil {
             templates: Vec::new(),
             dialog: None,
             pending_open: OpenRequest::from_args(std::env::args()),
+            drawings: DrawingSaves::default(),
+            confirm_clear: false,
+            levels_text: None,
         };
         let mut tasks: Vec<_> = app
             .markets
@@ -429,10 +474,11 @@ impl Fitil {
                 }
             }
             Message::Chart(message) => {
+                self.confirm_clear = false;
                 if let Some(selection) = &mut self.selection {
                     selection.chart.update(message);
                 }
-                return self.load_older_if_needed();
+                return Task::batch([self.load_older_if_needed(), self.save_drawings()]);
             }
             Message::SeriesLoaded(key, result) => {
                 if let Some(selection) = self.selection_of(&key) {
@@ -688,8 +734,204 @@ impl Fitil {
                 }
                 Err(error) => self.templates_error = Some(AppError::user_data(error)),
             },
+            Message::Escape => {
+                self.confirm_clear = false;
+                if self.dialog.is_some() {
+                    self.dialog = None;
+                } else if let Some(selection) = &mut self.selection {
+                    selection.chart.update(ChartMessage::Cancel);
+                }
+            }
+            Message::ToolSelected(tool) => {
+                self.confirm_clear = false;
+                if let Some(selection) = &mut self.selection {
+                    selection.chart.set_tool(tool);
+                }
+            }
+            Message::MagnetToggled => {
+                if let Some(selection) = &mut self.selection {
+                    let on = !selection.chart.magnet();
+                    selection.chart.set_magnet(on);
+                }
+            }
+            Message::DrawingsHiddenToggled => {
+                if let Some(selection) = &mut self.selection {
+                    let hidden = !selection.chart.drawings_hidden();
+                    selection.chart.set_drawings_hidden(hidden);
+                }
+            }
+            Message::DrawingsLockToggled => {
+                if let Some(selection) = &mut self.selection {
+                    let locked = !selection.chart.all_locked();
+                    selection.chart.lock_all(locked);
+                }
+                return self.save_drawings();
+            }
+            Message::ClearDrawings => {
+                if !std::mem::replace(&mut self.confirm_clear, true) {
+                    return Task::none();
+                }
+                self.confirm_clear = false;
+                if let Some(selection) = &mut self.selection {
+                    selection.chart.clear_drawings();
+                }
+                return self.save_drawings();
+            }
+            Message::DrawingColor(color) => {
+                return self.edit_drawing(|drawing| drawing.color = color);
+            }
+            Message::DrawingWidth(width) => {
+                return self.edit_drawing(|drawing| drawing.width = width);
+            }
+            Message::DrawingLine(line) => return self.edit_drawing(|drawing| drawing.line = line),
+            Message::DrawingText(text) => return self.edit_drawing(|drawing| drawing.text = text),
+            Message::DrawingLevels(text) => {
+                let Some(id) = self.selected_drawing().map(|drawing| drawing.id) else {
+                    return Task::none();
+                };
+                // Levels are written apart by spaces, so that a comma can be a decimal one.
+                let levels: Option<Vec<f64>> =
+                    text.split_whitespace().map(studies::parse_number).collect();
+                self.levels_text = Some((id, text));
+                if let Some(levels) = levels.filter(|levels| !levels.is_empty()) {
+                    return self.edit_drawing(|drawing| drawing.levels = levels);
+                }
+            }
+            Message::DrawingLockToggled => {
+                return self.edit_drawing(|drawing| drawing.locked = !drawing.locked);
+            }
+            Message::DuplicateDrawing => {
+                if let Some(selection) = &mut self.selection {
+                    selection.chart.duplicate_selected();
+                }
+                return self.save_drawings();
+            }
+            Message::DeleteDrawing => {
+                // Delete in a window is not for the chart behind it.
+                if self.dialog.is_none()
+                    && let Some(selection) = &mut self.selection
+                {
+                    selection.chart.delete_selected();
+                }
+                return self.save_drawings();
+            }
+            Message::Undo | Message::Redo => {
+                if self.dialog.is_none()
+                    && let Some(selection) = &mut self.selection
+                {
+                    if matches!(message, Message::Undo) {
+                        selection.chart.undo();
+                    } else {
+                        selection.chart.redo();
+                    }
+                }
+                return self.save_drawings();
+            }
+            Message::DrawingsLoaded(market, name, result) => {
+                let showing = self.selection.as_mut().filter(|selection| {
+                    selection.symbol.market == market && selection.symbol.name == name
+                });
+                match result {
+                    Ok(drawings) => {
+                        // Changes made meanwhile are newer than what was read.
+                        if let Entry::Vacant(unknown) = self.drawings.known.entry((market, name)) {
+                            if let Some(selection) = showing {
+                                selection.chart.set_drawings(drawings.clone());
+                            }
+                            unknown.insert(drawings);
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(selection) = showing {
+                            selection.error = Some(AppError::user_data(error));
+                        }
+                    }
+                }
+            }
+            Message::DrawingsSaved(result) => {
+                self.drawings.saving = false;
+                if let Err(error) = result
+                    && let Some(selection) = &mut self.selection
+                {
+                    selection.error = Some(AppError::user_data(error));
+                }
+                return self.next_drawing_save();
+            }
         }
         Task::none()
+    }
+
+    fn selected_drawing(&self) -> Option<&Drawing> {
+        self.selection.as_ref()?.chart.selected_drawing()
+    }
+
+    /// Changes the picked drawing and saves the change.
+    fn edit_drawing(&mut self, change: impl FnOnce(&mut Drawing)) -> Task<Message> {
+        if let Some(selection) = &mut self.selection {
+            selection.chart.edit_selected(change);
+        }
+        self.save_drawings()
+    }
+
+    /// Saves the chart's drawings if they changed. Saves run one at a time and in order,
+    /// so that an older one never overwrites a newer one.
+    fn save_drawings(&mut self) -> Task<Message> {
+        let Some(selection) = &mut self.selection else {
+            return Task::none();
+        };
+        let Some(drawings) = selection.chart.take_changed_drawings() else {
+            return Task::none();
+        };
+        let (market, name) = (selection.symbol.market, selection.symbol.name.clone());
+        self.drawings
+            .known
+            .insert((market, name.clone()), drawings.clone());
+        // A save of the same symbol still waiting takes the newer drawings instead.
+        let saves = &mut self.drawings.waiting;
+        match saves.iter_mut().find(|(waiting_market, waiting_name, _)| {
+            *waiting_market == market && *waiting_name == name
+        }) {
+            Some(waiting) => waiting.2 = drawings,
+            None => saves.push((market, name, drawings)),
+        }
+        self.next_drawing_save()
+    }
+
+    fn next_drawing_save(&mut self) -> Task<Message> {
+        if self.drawings.saving || self.drawings.waiting.is_empty() {
+            return Task::none();
+        }
+        let Ok(user) = &self.user_data else {
+            self.drawings.waiting.clear();
+            return Task::none();
+        };
+        let (market, name, drawings) = self.drawings.waiting.remove(0);
+        self.drawings.saving = true;
+        Task::perform(
+            fitil_market::save_drawings(user.clone(), market, name, drawings),
+            Message::DrawingsSaved,
+        )
+    }
+
+    /// Shows the drawings of the chart's symbol: from memory if it was opened before,
+    /// otherwise once read from the user's data.
+    fn show_drawings(&mut self) -> Task<Message> {
+        let Some(selection) = &mut self.selection else {
+            return Task::none();
+        };
+        let (market, name) = (selection.symbol.market, selection.symbol.name.clone());
+        if let Some(drawings) = self.drawings.known.get(&(market, name.clone())) {
+            selection.chart.set_drawings(drawings.clone());
+            return Task::none();
+        }
+        selection.chart.set_drawings(Vec::new());
+        let Ok(user) = &self.user_data else {
+            return Task::none();
+        };
+        Task::perform(
+            fitil_market::load_drawings(user.clone(), market, name.clone()),
+            move |result| Message::DrawingsLoaded(market, name.clone(), result),
+        )
     }
 
     /// Changes one indicator's settings with `change` and redraws the chart.
@@ -885,6 +1127,11 @@ impl Fitil {
             symbol: symbol.name.clone(),
             timeframe: source,
         };
+        // Drawings belong to the symbol: a timeframe of the same symbol keeps them.
+        let same_symbol = self
+            .selection
+            .as_ref()
+            .is_some_and(|current| current.symbol == symbol);
         let title = chart_title(&self.translations, &self.exchanges, &symbol, timeframe);
         // The chart stays, with its look and pane heights; only the series changes.
         let (chart, previous) = match self.selection.take() {
@@ -922,7 +1169,13 @@ impl Fitil {
         self.send(market, FeedCommand::Subscribe(topic));
         self.studies.reset();
         self.selection = Some(selection);
-        self.open_series()
+        let drawings = if same_symbol {
+            Task::none()
+        } else {
+            self.levels_text = None;
+            self.show_drawings()
+        };
+        Task::batch([self.open_series(), drawings])
     }
 
     /// Loads the newest candles of the selected series, unless they are loading already.
@@ -1028,13 +1281,24 @@ fn key_message(
     else {
         return None;
     };
-    match key {
-        keyboard::Key::Named(Named::Escape) => Some(Message::CloseDialog),
+    match key.as_ref() {
+        keyboard::Key::Named(Named::Escape) => Some(Message::Escape),
         keyboard::Key::Named(Named::ArrowUp) => Some(Message::SymbolSearchMove(-1)),
         keyboard::Key::Named(Named::ArrowDown) => Some(Message::SymbolSearchMove(1)),
-        _ if status == iced::event::Status::Captured || modifiers.command() || modifiers.alt() => {
-            None
+        // Keys a text box took are not for the chart.
+        _ if status == iced::event::Status::Captured => None,
+        keyboard::Key::Named(Named::Delete | Named::Backspace) => Some(Message::DeleteDrawing),
+        keyboard::Key::Character(c) if modifiers.command() && c.eq_ignore_ascii_case("z") => {
+            Some(if modifiers.shift() {
+                Message::Redo
+            } else {
+                Message::Undo
+            })
         }
+        keyboard::Key::Character(c) if modifiers.command() && c.eq_ignore_ascii_case("y") => {
+            Some(Message::Redo)
+        }
+        _ if modifiers.command() || modifiers.alt() => None,
         _ => text
             .filter(|text| text.chars().all(char::is_alphanumeric))
             .map(|text| Message::KeyTyped(text.to_string())),
@@ -1098,7 +1362,11 @@ fn chart_labels(t: &Translations) -> ChartLabels {
         months: std::array::from_fn(|i| months.get(i).cloned().unwrap_or_default()),
         magnitudes: std::array::from_fn(|i| magnitudes.get(i).cloned().unwrap_or_default()),
         day_suffix: t.get("chart-day-suffix"),
+        hour_suffix: t.get("chart-hour-suffix"),
+        minute_suffix: t.get("chart-minute-suffix"),
         loading: t.get("chart-loading-older"),
+        note: t.get("chart-note"),
+        bars: t.get("chart-bars"),
     }
 }
 
@@ -1170,6 +1438,9 @@ mod tests {
             templates_error: None,
             dialog: None,
             pending_open: None,
+            drawings: DrawingSaves::default(),
+            confirm_clear: false,
+            levels_text: None,
         };
         (app, market)
     }
@@ -1376,6 +1647,133 @@ mod tests {
         let _ = app.update(Message::SymbolSearchKind(None));
         let (search, kind, _) = app.symbol_search().unwrap();
         assert_eq!(app.symbol_results(&search, kind).len(), 2);
+    }
+
+    fn chart(app: &Fitil) -> &Chart {
+        &app.selection.as_ref().unwrap().chart
+    }
+
+    /// Draws a horizontal line at `price` through the chart's messages.
+    fn draw_line(app: &mut Fitil, price: f64) {
+        let _ = app.update(Message::ToolSelected(Some(DrawingKind::HorizontalLine)));
+        let anchor = fitil_core::Anchor {
+            time: 3 * 3_600_000,
+            price,
+        };
+        let _ = app.update(Message::Chart(ChartMessage::PlacePoint(anchor)));
+    }
+
+    #[test]
+    fn drawings_are_drawn_changed_and_saved_in_order() {
+        let (mut app, market) = app();
+        open_chart(&mut app, market, 10);
+        draw_line(&mut app, 105.0);
+        assert_eq!(chart(&app).drawings().len(), 1);
+        // The first save runs; the next change waits for it.
+        assert!(app.drawings.saving);
+        let _ = app.update(Message::DrawingColor(Rgb::hex(0xFF6D00)));
+        let _ = app.update(Message::DrawingWidth(4));
+        assert_eq!(
+            app.drawings.waiting.len(),
+            1,
+            "waiting saves of a symbol merge"
+        );
+        assert_eq!(app.drawings.waiting[0].2[0].width, 4);
+        let _ = app.update(Message::DrawingsSaved(Ok(())));
+        assert!(app.drawings.saving && app.drawings.waiting.is_empty());
+
+        let _ = app.update(Message::Undo);
+        assert_eq!(chart(&app).drawings()[0].width, 2);
+        let _ = app.update(Message::Redo);
+        assert_eq!(chart(&app).drawings()[0].width, 4);
+
+        // Deleting all takes a second click.
+        let _ = app.update(Message::ClearDrawings);
+        assert_eq!(chart(&app).drawings().len(), 1);
+        let _ = app.update(Message::ClearDrawings);
+        assert!(chart(&app).drawings().is_empty());
+
+        // Esc puts the tool away.
+        let _ = app.update(Message::ToolSelected(Some(DrawingKind::Ray)));
+        let _ = app.update(Message::Escape);
+        assert_eq!(chart(&app).tool(), None);
+    }
+
+    #[test]
+    fn drawings_belong_to_their_symbol() {
+        let (mut app, market) = app();
+        open_chart(&mut app, market, 10);
+        let _ = app.update(Message::DrawingsLoaded(
+            market,
+            "BTCUSDT".into(),
+            Ok(Vec::new()),
+        ));
+        draw_line(&mut app, 105.0);
+
+        // Another timeframe of the same symbol keeps them.
+        let four_hours = "4h".parse().unwrap();
+        let _ = app.update(Message::TimeframeSelected(four_hours));
+        assert_eq!(chart(&app).drawings().len(), 1);
+
+        // Another symbol has its own; going back shows the first one's again.
+        let _ = app.update(Message::SymbolSelected(market, "ETHUSDT".into()));
+        assert!(chart(&app).drawings().is_empty());
+        let _ = app.update(Message::SymbolSelected(market, "BTCUSDT".into()));
+        assert_eq!(chart(&app).drawings().len(), 1);
+
+        // Drawings read late do not replace newer ones.
+        let _ = app.update(Message::DrawingsLoaded(
+            market,
+            "BTCUSDT".into(),
+            Ok(Vec::new()),
+        ));
+        assert_eq!(chart(&app).drawings().len(), 1);
+    }
+
+    #[test]
+    fn levels_and_notes_are_typed_in() {
+        let (mut app, market) = app();
+        open_chart(&mut app, market, 10);
+        let _ = app.update(Message::ToolSelected(Some(DrawingKind::FibRetracement)));
+        for (hour, price) in [(1, 100.0), (5, 110.0)] {
+            let anchor = fitil_core::Anchor {
+                time: hour * 3_600_000,
+                price,
+            };
+            let _ = app.update(Message::Chart(ChartMessage::PlacePoint(anchor)));
+        }
+        let _ = app.view();
+        // Spaces apart, with a comma or a point before the decimals.
+        let _ = app.update(Message::DrawingLevels("0 0,5 1.618".into()));
+        assert_eq!(chart(&app).drawings()[0].levels, [0.0, 0.5, 1.618]);
+        // What cannot be read stays in the box and changes nothing.
+        let _ = app.update(Message::DrawingLevels("0 x".into()));
+        assert_eq!(chart(&app).drawings()[0].levels, [0.0, 0.5, 1.618]);
+        assert_eq!(app.levels_text.as_ref().unwrap().1, "0 x");
+
+        let _ = app.update(Message::ToolSelected(Some(DrawingKind::Text)));
+        let anchor = fitil_core::Anchor {
+            time: 2 * 3_600_000,
+            price: 104.0,
+        };
+        let _ = app.update(Message::Chart(ChartMessage::PlacePoint(anchor)));
+        let _ = app.update(Message::DrawingText("Destek".into()));
+        assert_eq!(chart(&app).selected_drawing().unwrap().text, "Destek");
+        let _ = app.view();
+    }
+
+    #[test]
+    fn every_drawing_tool_is_translated() {
+        for language in Language::ALL {
+            let t = Translations::new(language);
+            let keys = DrawingKind::ALL
+                .map(|kind| format!("drawing-{}", kind.id()))
+                .into_iter()
+                .chain(LineStyle::ALL.map(|style| format!("drawing-line-{}", style.id())));
+            for key in keys {
+                assert_ne!(t.get(&key), key, "{} has no {key}", language.code());
+            }
+        }
     }
 
     fn parse(args: &[&str]) -> Option<OpenRequest> {

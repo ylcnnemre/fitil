@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use fitil_core::Candle;
+pub use fitil_core::Rgb;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::{Definition, ParamKind, definition};
@@ -120,18 +121,22 @@ impl Params {
     }
 }
 
-/// A color as red, green and blue.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Rgb(pub u8, pub u8, pub u8);
+/// Colors are saved as `[red, green, blue]`.
+mod rgb_format {
+    use fitil_core::Rgb;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-impl Rgb {
-    /// A color from `0xRRGGBB`.
-    pub const fn hex(value: u32) -> Self {
-        Self((value >> 16) as u8, (value >> 8) as u8, value as u8)
+    pub fn serialize<S: Serializer>(rgb: &Rgb, serializer: S) -> Result<S::Ok, S::Error> {
+        (rgb.0, rgb.1, rgb.2).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Rgb, D::Error> {
+        let (red, green, blue) = <(u8, u8, u8)>::deserialize(deserializer)?;
+        Ok(Rgb(red, green, blue))
     }
 }
 
-/// Colors offered when choosing an output's color, and given in turn to new lines.
+/// Colors offered when choosing a line's color, and given in turn to new lines.
 pub const PALETTE: [Rgb; 12] = [
     Rgb::hex(0x2962FF),
     Rgb::hex(0xFF6D00),
@@ -150,6 +155,7 @@ pub const PALETTE: [Rgb; 12] = [
 /// How one output of an indicator is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OutputStyle {
+    #[serde(with = "rgb_format")]
     pub color: Rgb,
     /// Line width in pixels, 1–4.
     pub width: u8,

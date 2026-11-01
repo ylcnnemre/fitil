@@ -1,61 +1,69 @@
 # Şu Anki Durum
 
-**Son güncelleme:** 31 Ekim 2026
+**Son güncelleme:** 1 Kasım 2026
 
 ## Neredeyiz?
 
-- **Tasarım:** `docs/TASARIM.md` onaylı. Mimari bölümü (§6) 31 Ekim'de yeniden yazıldı. Adım 4 ile tablo ve §6.6 (veri dosyaları) güncellendi.
+- **Tasarım:** `docs/TASARIM.md` onaylı. Mimari bölümü (§6) 31 Ekim'de yeniden yazıldı. Adım 4 ile tablo ve §6.6 (veri dosyaları), TradingView düzeniyle §4.5, Adım 5 ile §4.4 ve §6.5 (simgeler) güncellendi.
 - **Adım 1 tamamlandı:** iskelet, GitHub deposu, CI.
 - **Adım 2 tamamlandı:** Binance bağlantısı ve yerel önbellek.
 - **Adım 3 tamamlandı:** grafik motoru.
 - **Mimari düzenleme tamamlandı:** çok borsalı, port/adaptör düzeni.
-- **Adım 4 kodlandı, proje sahibinin denemesi bekleniyor:** indikatörler ve paneller.
-  - `fitil-indicators`: 22 indikatör, artımlı hesap, referans değerlerle testler.
-  - `fitil-store`: mum önbelleğinden ayrı `user.sqlite` (şablonlar).
-  - `fitil-market`: grafikteki indikatörler (`Studies`) ve şablon kaydetme/okuma.
-  - `fitil-chart`: indikatör çizimi, alt paneller, sürüklenebilir panel kenarı.
-  - `fitil-app`: İndikatörler penceresi, ayar penceresi, indikatör etiketleri, Hacim düğmesi.
+- **Adım 4 tamamlandı:** 22 indikatör, alt paneller, şablonlar, ayar pencereleri.
+- **TradingView düzeni tamamlandı (karar 17):** solda liste yok, sembol arama penceresi.
+- **Adım 5 kodlandı, proje sahibinin denemesi bekleniyor:** çizim araçları.
+  - Simgeler Lucide setinden (karar 18), `assets/fonts/lucide.ttf`.
+  - `fitil-core`: çizim modeli (`Drawing`, `DrawingKind`, `Anchor`, `LineStyle`, `Rgb`).
+  - `fitil-store`: `user.sqlite` göç 2, `drawings` tablosu (sembol başına).
+  - `fitil-market`: `load_drawings`, `save_drawings`.
+  - `fitil-chart`: çizme, seçme, taşıma, geri al/yinele, mıknatıs; çizimler her karede çizilen katmanda.
+  - `fitil-app`: sol araç çubuğu, seçili çizimin satırı, geri al/yinele düğmeleri, kısayollar.
   - Ayrıntılar `03-gunluk.md` dosyasında.
 
-Uygulama şu an şunları gösteriyor (31 Ekim'de TradingView düzenine geçildi, karar 17):
+Uygulama şu an şunları gösteriyor:
 - **Üstte araç çubuğu:**
-  - Sembol adı. Tıklayınca sembol arama penceresi açılır. Grafikte yazmaya başlamak da açar.
+  - Sembol adı (büyüteç simgesiyle). Tıklayınca sembol arama penceresi açılır. Grafikte yazmaya başlamak da açar.
   - Sık kullanılan zaman dilimleri (1m 5m 15m 1h 4h 1d 1w) ve "Diğer" listesi.
-  - Grafik tipi, Log, %, **İndikatörler**, **Hacim** (mum altı hacim çubukları).
+  - Grafik tipi, Log, %, **İndikatörler**, **Hacim**, geri al ve yinele simgeleri.
   - En sağda dil düğmeleri.
-- **Grafik ekranın tamamını kaplar.** Solda sembol listesi yok. Açılışta en çok işlem gören Bitcoin paritesi (BTCUSDT) açılır.
-  - Araç çubuğunun altında her indikatör için bir etiket: adına tıklayınca ayarları açılır, ●/○ gizler/gösterir, × kaldırır.
-  - Fiyatın üstünde indikatörler, altında paneller (RSI, MACD, Hacim…), otomatik geçmiş yükleme.
+- **Solda çizim araçları çubuğu:**
+  - Seç ve taşı, trend çizgisi, ışın, uzatılmış çizgi, yatay çizgi, yatay ışın, dikey çizgi.
+  - Dikdörtgen, paralel kanal, Fibonacci.
+  - Metin notu, ölçüm.
+  - Mıknatıs, tümünü kilitle, çizimleri gizle, tümünü sil (iki tıkla).
+- **Grafik ekranın geri kalanını kaplar.** Açılışta BTCUSDT açılır.
+  - Araç çubuğunun altında indikatör etiketleri.
+  - Bir çizim seçiliyken onun satırı da çıkar: renk, kalınlık, çizgi tipi, metin ya da Fibonacci seviyeleri, kilitle, kopyala, sil.
+  - Yatay çizgilerin fiyatı eksende görünür.
 - **Sembol arama penceresi:**
   - Tümü / Spot / Vadeli sekmeleri.
-  - Sonuçlar önce yakınlığa (tam ad, aynı coin, baştan eşleşme), sonra dolar hacmine göre sıralanır.
+  - Sonuçlar önce yakınlığa, sonra dolar hacmine göre sıralanır.
   - Her sonuçta fiyat, günlük değişim ve borsa görünür. Ok tuşları + Enter ile seçilir, Esc kapatır.
 - **Altta durum çubuğu:**
-  - Grafiğin piyasasının bağlantısı, istek ağırlığı ve saat farkı. Ağırlık ve saat farkı yalnızca bunları bildiren borsalarda görünür.
+  - Grafiğin piyasasının bağlantısı, istek ağırlığı ve saat farkı.
   - Önbellekteki mum sayısı. Üzerine gelince önbellek yolu görünür.
 
 ## Proje sahibinin denemesi beklenenler
 
-Yeni düzen için:
-- Sembol arama: sembol adına tıklama, grafikte yazmaya başlama, sekmeler, ok tuşları + Enter. (Proje sahibi test penceresinde aramayı kullanıp ETHUSDT vadeliyi açtı; çalıştığı görüldü.)
+Adım 5 için (Claude ekrana tıklayamadığı için bunları proje sahibi dener):
+- **Çizme:** her araçla çizmek. İki noktalılar tıkla–tıkla ya da basılı tutup sürükle. Kanal üç tık ister. Yatay ve dikey çizgi, not tek tık.
+- **Düzenleme:** çizime tıklayıp seçmek, tutup taşımak, uçlarından (yuvarlak tutamaçlar) sürüklemek.
+- **Seçili çizimin satırı:** renk, kalınlık, çizgi tipi, not metni, Fibonacci seviyeleri (boşlukla ayrılır, virgül de olur: `0 0,5 1`), kilitle, kopyala, sil.
+- **Kısayollar:** Ctrl+Z / Ctrl+Y, Esc (aracı ya da seçimi bırakır), Delete.
+- **Mıknatıs:** uçlar mumun açılış, en yüksek, en düşük ya da kapanışına yapışmalı.
+- **Kayıt:** uygulamayı kapatıp açınca çizimler yerinde olmalı. Başka zaman diliminde de görünmeli. Spot ile vadelide ayrı tutulmalı.
 
-Adım 4 için (Claude ekrana tıklayamadığı için bunları proje sahibi dener):
-- İndikatörler düğmesi → listeden ekleme, arama ("rsi", "bant").
-- Bir indikatörün etiketine tıklayıp ayar değiştirme: uzunluk yazma (virgülle de olur: `2,5`), kaynak, renk, kalınlık, çizgiyi gizleme, Varsayılanlar.
-- Panel kenarını sürükleyerek yükseklik ayarlama. Sembol değişince panel yükseklikleri korunmalı.
-- Şablon: isim yazıp Kaydet, başka bir sembolde Uygula, Sil (iki tıkla: "Emin misin?").
-- Esc ile pencereyi kapatma, pencerenin dışına tıklayınca kapanma.
-- Hacim düğmesiyle mum altı hacmi kapatıp açma.
-
-Önceki adımlardan:
-- Grafik tipleri, Log/% ölçekleri, uzun kaydırma, 1d/1w etiketleri.
-- English düğmesi, arama, internet kesilince toparlanma.
+Daha önceki adımlardan, hâlâ denenmemiş olanlar:
+- İndikatör ekleme ve ayarları, panel kenarını sürükleme, şablonlar, Hacim düğmesi.
+- Grafik tipleri, Log/% ölçekleri, uzun kaydırma, English düğmesi, internet kesilince toparlanma.
 
 ## Bilinen sınırlar
 
-- İndikatörler uygulama kapanınca kaybolur. Kalıcı olmaları Adım 6'nın işi ("kaldığın yerden devam"). Şablonlar ise kalıcıdır.
-- Lejantta yazı genişliği tahminle hesaplanıyor. Çok uzun etiketlerde aralıklar biraz geniş ya da dar olabilir.
-- Arayüz testleri şimdilik `update` ve `view` fonksiyonları üzerinden yazıldı. Tıklama düzeyinde testler için `iced_test` kütüphanesi gerekiyor. İndirmek için proje sahibinin onayı istenecek.
+- İndikatörler uygulama kapanınca kaybolur. Kalıcı olmaları Adım 6'nın işi ("kaldığın yerden devam"). Şablonlar ve çizimler ise kalıcıdır.
+- Lejantta ve çizim etiketlerinde yazı genişliği tahminle hesaplanıyor. Çok uzun etiketlerde aralıklar biraz geniş ya da dar olabilir.
+- Dikdörtgenin sadece iki köşesi (çizilen noktalar) tutulup sürüklenebiliyor.
+- Ölçüm aracı TradingView'daki geçici cetvel gibi değil, kalıcı bir çizim. İstenmezse silinir.
+- Arayüz testleri `update` ve `view` fonksiyonları üzerinden yazıldı. Tıklama düzeyinde testler için `iced_test` gerekiyor, indirmek için onay bekleniyor.
 
 ## Açık sorular (proje sahibine sorulacak)
 
@@ -63,8 +71,9 @@ Adım 4 için (Claude ekrana tıklayamadığı için bunları proje sahibi dener
 - Commit'lerde GitHub'ın gizli e-posta adresi (noreply) kullanılsın mı? (Daha önce önerildi, cevap bekliyor.)
 - GitHub'da özel güvenlik bildirimi (private vulnerability reporting) açılsın mı? (Daha önce önerildi, cevap bekliyor.)
 
-## Sıradaki adım: Adım 5, çizim araçları
+## Sıradaki adım: Adım 6, çalışma alanı
 
-Henüz başlanmadı, proje sahibinin onayı bekleniyor. `docs/TASARIM.md` §4.4'teki araçlar. Taslak:
-- Çizimler `user.sqlite`'ta sembol başına saklanır (yeni göç).
-- Çizim mantığı (tutamaçlar, mıknatıs, seçim) `fitil-chart`'ta, kayıt `fitil-market` ve `fitil-store`'da.
+Henüz başlanmadı, proje sahibinin onayı bekleniyor. `docs/TASARIM.md` §4.5. Taslak:
+- Çoklu grafik düzeni (iced `pane_grid`), grafikler arası eşleme.
+- İzleme listesi: sağda açılıp kapanan panel.
+- Kaldığın yerden devam: düzen, grafikler ve indikatörler `user.sqlite`'ta.

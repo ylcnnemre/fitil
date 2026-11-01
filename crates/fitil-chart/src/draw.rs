@@ -3,12 +3,14 @@
 use std::ops::RangeInclusive;
 use std::time::{Duration, Instant};
 
+use fitil_core::Anchor;
 use iced::alignment::{Horizontal, Vertical};
 use iced::mouse;
 use iced::widget::canvas::{self, Action, Event, Frame, Geometry, LineDash, Path, Stroke, Text};
 use iced::{Color, Pixels, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::scale::{self, Mapper};
+use crate::shapes::readable_on;
 use crate::study::{BarColors, Plot, PlotFill, PlotStyle, Study, ValueFormat};
 use crate::{Chart, ChartKind, ChartMessage, PriceScale};
 
@@ -29,7 +31,6 @@ const DIVIDER_GRAB: f32 = 4.0;
 /// Vertical drag, in pixels, before dragging the plot also moves the price range.
 const VERTICAL_DRAG_THRESHOLD: f32 = 12.0;
 const TEXT_SIZE: f32 = 12.0;
-/// A generous width of one character, to set the pieces of a legend side by side.
 /// About how wide a character is, as a share of the text size, to set the pieces of a
 /// legend side by side.
 const CHAR_WIDTH: f32 = 0.55;
@@ -41,6 +42,8 @@ const LABEL_SPACING: f32 = 14.0;
 const AXIS_LINE_HEIGHT: f32 = 16.0;
 const DASH: [f32; 2] = [4.0, 4.0];
 const DOUBLE_CLICK_TIME: Duration = Duration::from_millis(350);
+/// Pixels the mouse may move between press and release and still make a click.
+const CLICK_SLOP: f32 = 4.0;
 
 /// Mouse state kept between events.
 #[derive(Default)]
@@ -52,10 +55,24 @@ pub struct State {
 }
 
 struct Drag {
-    area: Area,
+    what: Dragged,
     last: Point,
     /// Vertical distance dragged so far.
     vertical: f32,
+}
+
+enum Dragged {
+    /// The view, by the area pressed: panning, scaling an axis or resizing a pane.
+    View(Area),
+    /// A drawing by one of its points, or whole; with its points when the drag began.
+    Drawing {
+        id: u64,
+        handle: Option<usize>,
+        points: Vec<Anchor>,
+        origin: Point,
+    },
+    /// A press with the drawing tool: let go somewhere else, it places a point there.
+    Placing { origin: Point },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,10 +88,10 @@ enum Area {
 }
 
 /// Where the panes and the axes are inside the canvas.
-struct Layout {
+pub(crate) struct Layout {
     size: Size,
     /// The price pane.
-    plot: Rectangle,
+    pub(crate) plot: Rectangle,
     /// The indicator panes, top to bottom, as wide as the price pane.
     panes: Vec<Rectangle>,
 }
@@ -146,17 +163,17 @@ fn panes_height(size: Size) -> f32 {
 }
 
 /// What is on screen, worked out once per frame.
-struct Visible {
+pub(crate) struct Visible {
     /// The first and last candle in view.
     first: usize,
     last: usize,
     /// The bars at the plot's edges, which may lie beyond the candles.
     first_bar: i64,
     last_bar: i64,
-    mapper: Mapper,
+    pub(crate) mapper: Mapper,
     /// Price range of the price pane's full height, in scale units.
-    low: f64,
-    high: f64,
+    pub(crate) low: f64,
+    pub(crate) high: f64,
     max_volume: f64,
 }
 
@@ -219,7 +236,7 @@ impl Chart {
     }
 
     /// The horizontal position of `bar`, which may lie between or beyond the candles.
-    fn x_at(&self, layout: &Layout, bar: f64) -> f32 {
+    pub(crate) fn x_at(&self, layout: &Layout, bar: f64) -> f32 {
         (f64::from(layout.plot.width) - (self.right - bar) * self.spacing) as f32
     }
 
@@ -374,7 +391,8 @@ impl Chart {
         Some((low - below, high + span * PANE_MARGIN))
     }
 
-    fn y(&self, layout: &Layout, visible: &Visible, price: f64) -> f32 {
+    /// The height of `price` in the price pane.
+    pub(crate) fn y(&self, layout: &Layout, visible: &Visible, price: f64) -> f32 {
         self.y_of(layout, visible, visible.mapper.to_scale(price))
     }
 
@@ -383,7 +401,8 @@ impl Chart {
         (share * f64::from(layout.plot.height)) as f32
     }
 
-    fn value_at(&self, layout: &Layout, visible: &Visible, y: f32) -> f64 {
+    /// The value, in price scale units, at height `y` of the price pane.
+    pub(crate) fn value_at(&self, layout: &Layout, visible: &Visible, y: f32) -> f64 {
         visible.high - f64::from(y / layout.plot.height) * (visible.high - visible.low)
     }
 
@@ -888,6 +907,11 @@ impl Chart {
             }
         });
 
+        // The prices of horizontal lines drawn by the user, on the axis.
+        let line_prices: Vec<(f32, Anchor, Color)> = visible
+            .map(|v| self.line_prices(layout, v))
+            .unwrap_or_default();
+
         // Axis labels, except where a box goes.
         let mut boxes = Vec::new();
         if let Some((y, lines, _)) = &last_price {
@@ -895,6 +919,9 @@ impl Chart {
         }
         if let Some(crosshair) = &crosshair {
             boxes.push(axis_box_span(crosshair.pane, crosshair.y, 1));
+        }
+        for (y, _, _) in &line_prices {
+            boxes.push(axis_box_span(plot, *y, 1));
         }
         let free = |y: f32| {
             boxes.iter().all(|&(top, end)| {
@@ -954,6 +981,15 @@ impl Chart {
                     color,
                     Horizontal::Center,
                 ));
+            }
+        }
+
+        if let Some(v) = visible {
+            let background = palette.background.base.color;
+            self.draw_drawings(frame, layout, v, background);
+            for (y, anchor, color) in &line_prices {
+                let price = self.price_label(v, v.mapper.to_scale(anchor.price));
+                axis_box(frame, plot, *y, &[price], *color, readable_on(*color));
             }
         }
 
@@ -1229,6 +1265,42 @@ impl canvas::Program<ChartMessage> for Chart {
             mouse::Event::ButtonPressed(mouse::Button::Left) => {
                 let position = cursor.position_in(bounds)?;
                 let area = layout.area(position)?;
+                let start = |what| Drag {
+                    what,
+                    last: position,
+                    vertical: 0.0,
+                };
+                // On the price pane, a press places a point with the drawing tool, or
+                // picks a drawing to drag.
+                if area == Area::Plot
+                    && let Some(v) = self.visible(&layout)
+                {
+                    if self.tool.is_some() {
+                        state.last_press = None;
+                        state.drag = Some(start(Dragged::Placing { origin: position }));
+                        let anchor = self.anchor_at(&layout, &v, position);
+                        return Some(
+                            Action::publish(ChartMessage::PlacePoint(anchor)).and_capture(),
+                        );
+                    }
+                    if let Some((id, handle)) = self.drawing_at(&layout, &v, position) {
+                        let points = self
+                            .drawings
+                            .iter()
+                            .find(|drawing| drawing.id == id)
+                            .map(|drawing| drawing.points.clone())
+                            .unwrap_or_default();
+                        state.last_press = None;
+                        state.drag = Some(start(Dragged::Drawing {
+                            id,
+                            handle,
+                            points,
+                            origin: position,
+                        }));
+                        let select = ChartMessage::SelectDrawing(Some(id));
+                        return Some(Action::publish(select).and_capture());
+                    }
+                }
                 let now = Instant::now();
                 let double = state.last_press.is_some_and(|(time, place)| {
                     now.duration_since(time) < DOUBLE_CLICK_TIME && place.distance(position) < 5.0
@@ -1244,18 +1316,45 @@ impl canvas::Program<ChartMessage> for Chart {
                     };
                     return Some(Action::publish(reset).and_capture());
                 }
-                state.drag = Some(Drag {
-                    area,
-                    last: position,
-                    vertical: 0.0,
-                });
+                state.drag = Some(start(Dragged::View(area)));
+                // A press beside the picked drawing lets go of it.
+                if self.selected.is_some() {
+                    return Some(Action::publish(ChartMessage::SelectDrawing(None)).and_capture());
+                }
                 Some(Action::capture())
             }
             mouse::Event::ButtonReleased(mouse::Button::Left) => {
-                state.drag.take().map(|_| Action::capture())
+                let drag = state.drag.take()?;
+                match drag.what {
+                    Dragged::Drawing { .. } => {
+                        Some(Action::publish(ChartMessage::FinishMove).and_capture())
+                    }
+                    // Let go away from where it was pressed, the tool places a point
+                    // there too: drawings can be dragged out as well as clicked.
+                    Dragged::Placing { origin } => {
+                        let position = cursor.position_in(bounds)?;
+                        let v = self.visible(&layout)?;
+                        if position.distance(origin) <= CLICK_SLOP {
+                            return Some(Action::capture());
+                        }
+                        let anchor = self.anchor_at(&layout, &v, position);
+                        Some(Action::publish(ChartMessage::PlacePoint(anchor)).and_capture())
+                    }
+                    Dragged::View(_) => Some(Action::capture()),
+                }
             }
             mouse::Event::CursorMoved { .. } => {
                 let Some(drag) = &mut state.drag else {
+                    // While a drawing is being placed, its next point follows the cursor.
+                    if self.draft.is_some()
+                        && let Some(position) = cursor.position_in(bounds)
+                        && layout.area(position) == Some(Area::Plot)
+                        && let Some(v) = self.visible(&layout)
+                    {
+                        state.hovering = true;
+                        let anchor = self.anchor_at(&layout, &v, position);
+                        return Some(Action::publish(ChartMessage::PreviewPoint(anchor)));
+                    }
                     // Redraw the crosshair while the cursor is over the chart, and once
                     // more when it leaves so the crosshair disappears.
                     let over = cursor.is_over(bounds);
@@ -1267,7 +1366,40 @@ impl canvas::Program<ChartMessage> for Chart {
                 let position = Point::new(position.x, position.y);
                 let delta = position - drag.last;
                 drag.last = position;
-                let message = match drag.area {
+                let area = match &drag.what {
+                    Dragged::View(area) => *area,
+                    Dragged::Drawing {
+                        id,
+                        handle,
+                        points,
+                        origin,
+                    } => {
+                        let v = self.visible(&layout)?;
+                        let moved = match handle {
+                            Some(handle) => {
+                                let mut moved = points.clone();
+                                if let Some(point) = moved.get_mut(*handle) {
+                                    *point = self.anchor_at(&layout, &v, position);
+                                }
+                                moved
+                            }
+                            None => self.moved_points(&layout, &v, points, position - *origin),
+                        };
+                        let message = ChartMessage::MoveDrawing {
+                            id: *id,
+                            points: moved,
+                        };
+                        return Some(Action::publish(message).and_capture());
+                    }
+                    Dragged::Placing { .. } => {
+                        let v = self.visible(&layout)?;
+                        let anchor = self.anchor_at(&layout, &v, position);
+                        return Some(
+                            Action::publish(ChartMessage::PreviewPoint(anchor)).and_capture(),
+                        );
+                    }
+                };
+                let message = match area {
                     Area::Plot => {
                         drag.vertical += delta.y;
                         let moves_price = self.price_range.is_some()
@@ -1363,17 +1495,28 @@ impl canvas::Program<ChartMessage> for Chart {
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
         if let Some(drag) = &state.drag {
-            return match drag.area {
-                Area::Divider(_) => mouse::Interaction::ResizingVertically,
+            return match drag.what {
+                Dragged::View(Area::Divider(_)) => mouse::Interaction::ResizingVertically,
+                Dragged::Placing { .. } => mouse::Interaction::Crosshair,
                 _ => mouse::Interaction::Grabbing,
             };
         }
         let layout = self.layout(bounds.size());
-        match cursor
-            .position_in(bounds)
-            .and_then(|point| layout.area(point))
-        {
-            Some(Area::Plot | Area::Pane(_)) => mouse::Interaction::Crosshair,
+        let position = cursor.position_in(bounds);
+        match position.and_then(|point| layout.area(point)) {
+            Some(Area::Plot) => {
+                // A drawing under the cursor can be picked.
+                let over_drawing = self.tool.is_none()
+                    && position
+                        .zip(self.visible(&layout))
+                        .is_some_and(|(point, v)| self.drawing_at(&layout, &v, point).is_some());
+                if over_drawing {
+                    mouse::Interaction::Pointer
+                } else {
+                    mouse::Interaction::Crosshair
+                }
+            }
+            Some(Area::Pane(_)) => mouse::Interaction::Crosshair,
             Some(Area::PriceAxis | Area::Divider(_)) => mouse::Interaction::ResizingVertically,
             Some(Area::TimeAxis) => mouse::Interaction::ResizingHorizontally,
             Some(Area::PaneAxis(_)) | None => mouse::Interaction::default(),
@@ -1386,7 +1529,7 @@ mod tests {
     use super::*;
     use crate::ChartLabels;
     use crate::study::StudyPlacement;
-    use fitil_core::Candle;
+    use fitil_core::{Candle, Drawing, DrawingKind};
 
     fn chart(candles: usize, studies: Vec<Study>) -> Chart {
         let labels = ChartLabels {
@@ -1398,7 +1541,11 @@ mod tests {
             months: std::array::from_fn(|i| format!("M{}", i + 1)),
             magnitudes: ["K", "M", "B"].map(String::from),
             day_suffix: "d".into(),
+            hour_suffix: "h".into(),
+            minute_suffix: "m".into(),
             loading: "…".into(),
+            note: "Note".into(),
+            bars: "bars".into(),
         };
         let mut chart = Chart::new(
             "TEST".into(),
@@ -1543,6 +1690,50 @@ mod tests {
         assert_eq!(plot_indices(&shifted, &visible, 50), Some(0..=28));
         shifted.offset = -200;
         assert_eq!(plot_indices(&shifted, &visible, 50), None);
+    }
+
+    #[test]
+    fn drawings_are_picked_where_they_are_drawn() {
+        const HOUR: i64 = 3_600_000;
+        let mut chart = chart(50, Vec::new());
+        let layout = chart.layout(size());
+        let visible = chart.visible(&layout).unwrap();
+        let anchor = Anchor {
+            time: 40 * HOUR,
+            price: 11.5,
+        };
+        chart.set_drawings(vec![Drawing::new(
+            1,
+            DrawingKind::HorizontalLine,
+            vec![anchor],
+        )]);
+        let point = chart.point_of(&layout, &visible, anchor);
+        let near = Point::new(point.x - 200.0, point.y + 3.0);
+        assert_eq!(chart.drawing_at(&layout, &visible, near), Some((1, None)));
+        let far = Point::new(point.x, point.y + 30.0);
+        assert_eq!(chart.drawing_at(&layout, &visible, far), None);
+
+        // Once picked, its point can be grabbed.
+        chart.update(ChartMessage::SelectDrawing(Some(1)));
+        assert_eq!(
+            chart.drawing_at(&layout, &visible, point),
+            Some((1, Some(0)))
+        );
+
+        // The time and price under a point are those it was drawn at.
+        let back = chart.anchor_at(&layout, &visible, point);
+        assert_eq!(back.time, anchor.time);
+        assert!((back.price - anchor.price).abs() < 1e-6);
+
+        // With the magnet, a point sticks to the nearest price of the nearest candle.
+        chart.set_magnet(true);
+        let above_high = Point::new(point.x + 2.0, chart.y(&layout, &visible, 12.2));
+        let stuck = chart.anchor_at(&layout, &visible, above_high);
+        assert_eq!((stuck.time, stuck.price), (40 * HOUR, 12.0));
+
+        // Hidden drawings cannot be picked.
+        chart.set_drawings_hidden(true);
+        assert_eq!(chart.drawing_at(&layout, &visible, near), None);
     }
 
     #[test]

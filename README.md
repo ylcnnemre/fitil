@@ -66,6 +66,8 @@ Katkılar memnuniyetle karşılanır. Başlamadan önce [CONTRIBUTING.md](CONTRI
 
 [GPL-3.0](LICENSE). Fitil'i kullanabilir, değiştirebilir ve dağıtabilirsin. Değiştirilmiş bir sürümü dağıtırsan kaynak kodunu da aynı lisansla açman gerekir.
 
+Simgeler [Lucide](https://lucide.dev) setinden gelir ([ISC lisansı](assets/fonts/LICENSE-lucide.txt)).
+
 ---
 
 ## English
@@ -115,3 +117,5 @@ Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
 ### License
 
 [GPL-3.0](LICENSE). You may use, modify and distribute Fitil. If you distribute a modified version, you must release its source code under the same license.
+
+The icons come from the [Lucide](https://lucide.dev) set ([ISC license](assets/fonts/LICENSE-lucide.txt)).

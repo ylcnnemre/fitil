@@ -313,3 +313,45 @@ Proje sahibi "Evet, başla" dedi. Oturum uzun sürdüğü için arada bir kez ö
 **Ekranda doğrulananlar:** Test penceresi (önbellek kopyası) açıldı, BTCUSDT kendiliğinden geldi. Proje sahibi o pencerede arama penceresini açıp ETHUSDT vadeliyi seçti. Ekran görüntüleri pencerenin, sekmelerin, etiketlerin ve "2.173 sonuçtan ilk 100'ü" notunun doğru çıktığını gösterdi.
 
 **Not:** Proje sahibinin kendi penceresi (`target\debug\fitil.exe`, eski sürüm) açık kaldı, kapatılmadı. Yeni sürüm `target\verify` klasöründe derlendi.
+
+---
+
+## 1 Kasım 2026
+
+### Adım 5: Çizim araçları (kodlandı, proje sahibinin denemesi bekleniyor)
+
+**Nasıl başladı:** Proje sahibi "sırada ne var" diye sordu. Claude Adım 5'i ve sol çubuk simgeleri için iki yolu anlattı: Lucide (indirme gerekir) ya da kendimiz çizmek. Proje sahibi "Lucide ile başla" dedi (karar 18).
+
+**Yapılanlar:**
+1. **Lucide:** `lucide-static@1.66.0` paketinden sadece `lucide.ttf` (977 KB), `codepoints.json` ve `LICENSE` indirildi (jsDelivr). Önce scratchpad'e indirilip incelendi, sonra `assets/fonts/` içine kondu. Yazı tipinin iç adı `lucide`. Lisans ISC, Feather'dan gelen simgeler MIT.
+2. **`fitil-core`, `drawing.rs`:** `Anchor { time, price }`, 11 türlü `DrawingKind`, `LineStyle`, `Drawing`, `FIB_LEVELS`. `Rgb` indikatörlerden çekirdeğe taşındı. İndikatör ayarları onu `[r, g, b]` olarak kaydetmeye devam ediyor (`rgb_format`).
+3. **`fitil-store`:** `user.sqlite` göç 2 ile `drawings (exchange, market, symbol, body)` tablosu. `drawings` ve `save_drawings` (`None` siler).
+4. **`fitil-market`, `drawings.rs`:** JSON biçimi `{"version":1,"drawings":[…]}`. Okunamayan çizim atlanır, kalınlık 1–4'e çekilir. Ortak `with_user` yardımcısı `templates.rs`'te.
+5. **`fitil-chart`:**
+   - `drawings.rs`: yerleştirme (`Draft`), seçme, sürükleme (ilk hareket geri alma için kayıt alır), kilit, kopyala (5 çubuk sağa), sil, tümünü sil, geri al/yinele (100 adım), `take_changed_drawings`.
+   - Zaman ↔ çubuk dönüşümü (`bar_of`, `time_of`): boşluklu mumlarda araya oranlar, mumların dışında zaman dilimi hızıyla devam eder. Aynı çizim her zaman diliminde doğru yerde durur.
+   - `shapes.rs`: her çizimin ekrandaki hâli (`Shape`: çizgiler, kılavuz çizgiler, alanlar, etiketler, tutamaçlar). Aynı şekil hem çizmek hem tıklamayı bulmak için kullanılıyor. Mıknatıs `anchor_at` içinde.
+   - `draw.rs`: fare olayları. Araç seçiliyken basınca nokta konur; basılı sürükleyip bırakınca ikinci nokta da konur. Çizime basınca seçilir ve sürüklenir. Çizimler her karede çizilen katmanda, yatay çizgilerin fiyatı eksende.
+6. **`fitil-app`:**
+   - `icons.rs` (kod noktaları, `.font(icons::FONT_BYTES)`).
+   - Sol araç çubuğu, seçili çizimin satırı, geri al/yinele düğmeleri.
+   - `Message::Escape`, Delete/Backspace, Ctrl+Z, Ctrl+Y ve Ctrl+Shift+Z.
+   - Kayıtlar sırayla yapılıyor (`DrawingSaves`). Biri sürerken yenisi bekliyor, aynı sembolün bekleyen kaydı en yenisiyle birleşiyor. Açılan sembollerin çizimleri bellekte de tutuluyor, geri dönünce okumadan gösteriliyor.
+   - Zaman dilimi değişince çizimler kalıyor, sembol değişince o sembolünkiler geliyor.
+
+**Ekran denetiminde bulunanlar ve düzeltilenler:**
+- **Sol çubuk ekranın yarısını kaplıyordu:** `scrollable` varsayılan olarak bütün genişliği istiyor. `width(Shrink)` verildi.
+- **Fibonacci etiketleri kesiliyordu:** etiketler çizimin solundaydı, grafiğin kenarında kesiliyordu. Artık her seviyenin hemen üstünde, içeride.
+- **Ölçümde "9s 0dk" yazıyordu:** sıfır olan ikinci birim artık atlanıyor ("9s").
+
+**Ekranda doğrulananlar** (test penceresi, önbellek kopyası, geçici `TEMP-VERIFY` satırlarıyla 10 örnek çizim):
+- dikey ve yatay çizgi, yatay çizginin eksendeki fiyatı;
+- Fibonacci seviyeleri, bantları ve etiketleri;
+- trend çizgisi, ışın, paralel kanal ve orta çizgisi;
+- dikdörtgen, not ve ölçüm kutusu (−47,57, 9 mum);
+- seçili Fibonacci'nin satırı;
+- bütün Lucide simgeleri.
+
+Geçici satırlar silindi. Proje sahibi test penceresini yine kullandı: grafik tipi listesini açtı, imleci gezdirdi.
+
+**Testler:** 154 test (`fitil-indicators` 30, `fitil-chart` 29, `fitil-market` 25, `fitil-app` 23, `fitil-core` 15, `fitil-store` 14, `fitil-exchange` 9, `fitil-binance` 9) ve 3 canlı test. fmt ve clippy temiz. Test penceresi `target/verify` içindeki programı kilitlediği için son çalıştırmada `--lib --bins` kullanıldı.

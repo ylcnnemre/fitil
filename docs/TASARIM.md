@@ -101,8 +101,9 @@ Alış/Satış Hacmi ve CVD için ek veri indirmek gerekmez. Binance her mumla b
   - Kilitleme ve gizleme.
   - Geri al / yinele (Ctrl+Z / Ctrl+Y).
 - **Stil:** Renk, kalınlık, çizgi tipi (düz, kesikli, noktalı).
+- **Yerleşim:** Araçlar TradingView'daki gibi grafiğin solunda dikey bir çubuktadır; mıknatıs, tümünü kilitle, gizle ve sil düğmeleri de orada. Seçili çizimin rengi, kalınlığı, çizgi tipi, metni ya da Fibonacci seviyeleri grafiğin üstündeki satırdan değiştirilir. Geri al / yinele düğmeleri üst araç çubuğundadır.
 - **Kayıt:**
-  - Çizimler sembole bağlıdır ve tüm zaman dilimlerinde görünür.
+  - Çizimler sembole bağlıdır ve tüm zaman dilimlerinde görünür. Aynı adlı spot ve vadeli pariteler ayrı semboldür, çizimleri de ayrıdır (TradingView gibi).
   - Otomatik kaydedilir, uygulama kapansa da kaybolmaz.
 
 ### 4.5 Çalışma alanı
@@ -214,7 +215,7 @@ Proje, her biri tek bir işi yapan parçalara (crate) bölünür. Hedef üç şe
 
 | Crate | Görevi | Bağlı olabileceği crate'ler |
 |---|---|---|
-| `fitil-core` | Alan modeli: mum, sembol, piyasa, borsa kimliği, zaman dilimi, mum birleştirme. | — (hiçbiri) |
+| `fitil-core` | Alan modeli: mum, sembol, piyasa, borsa kimliği, zaman dilimi, mum birleştirme, çizimler (zaman ve fiyata bağlı noktalar). | — (hiçbiri) |
 | `fitil-exchange` | Borsa arayüzü (`Exchange`): her borsanın uyduğu sözleşme. Ortak araçlar: WebSocket bağlantı motoru, istek limiti, hata tipleri. | core |
 | `fitil-binance` ve ileride diğer borsalar | Bir borsanın adaptörü: arayüzü o borsanın API'siyle uygular. | core, exchange |
 | `fitil-store` | Yerel veritabanı, iki dosya:<br>• mum önbelleği (her an silinebilir, yeniden indirilir),<br>• kullanıcının kendi verisi: indikatör şablonları, ileride çizimler, düzenler ve ayarlar.<br>Sürüm numaralı göçlerle (migration) çalışır. | core |
@@ -307,6 +308,7 @@ fitil/
 │  ├─ fitil-indicators/   indikatör hesapları
 │  ├─ fitil-chart/        grafik bileşeni
 │  └─ fitil-app/          pencere ve ekranlar
+├─ assets/fonts/          Lucide simge yazı tipi ve lisansı
 ├─ locales/
 │  ├─ tr/                 Türkçe metinler
 │  └─ en/                 İngilizce metinler
@@ -326,6 +328,7 @@ fitil/
 | Veritabanı | SQLite (rusqlite) | Tek dosya, kurulum gerektirmez. |
 | Çeviri | Fluent (.ftl dosyaları) | Yeni dil eklemek için Rust bilmek gerekmez, bir metin dosyasını çevirmek yeterli. |
 | Yazı tipi | Inter (SIL Open Font License) | Türkçe karakterleri tam destekler. Uygulamayla birlikte gelir. |
+| Simgeler | Lucide (ISC lisansı) | Yazı tipi dosyası olarak programa gömülür (`assets/fonts/`). Proje sahibi 1 Kasım 2026'da onayladı. |
 | Zaman | İçeride her şey UTC | Ekranda kullanıcının saat diliminde gösterilir. |
 | Fiyatlar | 64 bit ondalık sayı | Ekranda sembolün kendi hassasiyetiyle gösterilir. |
 | Kullanıcı scriptleri (Faz 2) | Lua | Hızlı, küçük ve öğrenmesi kolay. |

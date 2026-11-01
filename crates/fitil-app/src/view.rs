@@ -3,14 +3,19 @@
 //! symbol's name in the toolbar or by typing on the chart.
 
 use fitil_chart::{ChartKind, PriceScale};
-use fitil_core::Timeframe;
+use fitil_core::{Drawing, DrawingKind, LineStyle, Timeframe};
+use fitil_indicators::PALETTE;
 use fitil_market::Study;
-use iced::widget::{button, column, container, pick_list, row, rule, space, text, tooltip};
-use iced::{Element, Fill};
+use iced::widget::{
+    Column, button, column, container, pick_list, row, rule, scrollable, space, text, text_input,
+    tooltip,
+};
+use iced::{Element, Fill, Shrink};
 
 use crate::i18n::{Language, Translations};
 use crate::{
-    Connection, Fitil, Load, Message, Selection, TIMEFRAME_CHOICES, format, storage, studies,
+    Connection, Fitil, Load, Message, Selection, TIMEFRAME_CHOICES, dialogs, format, icons,
+    storage, studies,
 };
 
 /// Timeframes with a button of their own; the others are in a list beside them.
@@ -51,10 +56,14 @@ fn toolbar(app: &Fitil) -> Element<'_, Message> {
         |selection| selection.symbol.name.clone(),
     );
     let symbol_button = tooltip(
-        button(text(symbol).size(16))
-            .style(button::text)
-            .padding([4, 10])
-            .on_press(Message::OpenSymbolSearch(String::new())),
+        button(
+            row![icons::icon(icons::SEARCH, 15.0), text(symbol).size(16)]
+                .spacing(8)
+                .align_y(iced::Center),
+        )
+        .style(button::text)
+        .padding([4, 10])
+        .on_press(Message::OpenSymbolSearch(String::new())),
         hint(t.get("chart-symbol-hint")),
         tooltip::Position::Bottom,
     );
@@ -95,17 +104,49 @@ fn toolbar(app: &Fitil) -> Element<'_, Message> {
             .push(scale_button(PriceScale::Percent, "scale-percent"))
             .push(divider())
             .push(
-                button(text(t.get("chart-indicators")).size(14))
-                    .style(button::text)
-                    .padding([4, 8])
-                    .on_press(Message::OpenIndicators),
+                button(
+                    row![
+                        icons::icon(icons::INDICATORS, 15.0),
+                        text(t.get("chart-indicators")).size(14),
+                    ]
+                    .spacing(6)
+                    .align_y(iced::Center),
+                )
+                .style(button::text)
+                .padding([4, 8])
+                .on_press(Message::OpenIndicators),
             )
             .push(
                 button(text(t.get("chart-volume-toggle")).size(14))
                     .style(switch(app.show_volume))
                     .padding([4, 8])
                     .on_press(Message::VolumeToggled),
-            );
+            )
+            .push(divider());
+        let chart = &selection.chart;
+        let history = |glyph: char, key: &str, can: bool, message: Message| {
+            tooltip(
+                button(icons::icon(glyph, 16.0))
+                    .style(button::text)
+                    .padding([4, 8])
+                    .on_press_maybe(can.then_some(message)),
+                hint(t.get(key)),
+                tooltip::Position::Bottom,
+            )
+        };
+        bar = bar
+            .push(history(
+                icons::UNDO,
+                "chart-undo",
+                chart.can_undo(),
+                Message::Undo,
+            ))
+            .push(history(
+                icons::REDO,
+                "chart-redo",
+                chart.can_redo(),
+                Message::Redo,
+            ));
     }
 
     let language_button = |language: Language| {
@@ -208,6 +249,9 @@ fn chart_area(app: &Fitil) -> Element<'_, Message> {
                 .wrap(),
         );
     }
+    if let Some(drawing) = selection.chart.selected_drawing() {
+        content = content.push(drawing_bar(app, drawing));
+    }
     if let Some(error) = &selection.error {
         content = content.push(text(error.message(t)).style(text::danger));
     }
@@ -218,9 +262,195 @@ fn chart_area(app: &Fitil) -> Element<'_, Message> {
     } else {
         selection.chart.view().map(Message::Chart)
     };
-    content
+    let content = content
         .push(chart)
-        .push(text(t.get("chart-hint")).size(12).style(text::secondary))
+        .push(text(t.get("chart-hint")).size(12).style(text::secondary));
+    row![drawing_tools(app, selection), rule::vertical(1), content]
+        .spacing(6)
+        .into()
+}
+
+/// The drawing tools down the left side, as in TradingView, then switches for every
+/// drawing of the symbol.
+fn drawing_tools<'a>(app: &'a Fitil, selection: &'a Selection) -> Element<'a, Message> {
+    let t = &app.translations;
+    let chart = &selection.chart;
+    let tool = |glyph: char, tip: String, on: bool, message: Message| -> Element<'a, Message> {
+        let style = if on { button::primary } else { button::text };
+        tooltip(
+            button(icons::icon(glyph, 18.0))
+                .style(style)
+                .padding([5, 8])
+                .on_press(message),
+            hint(tip),
+            tooltip::Position::Right,
+        )
+        .into()
+    };
+
+    let mut tools = Column::new().spacing(2).push(tool(
+        icons::CURSOR,
+        t.get("drawing-cursor"),
+        chart.tool().is_none(),
+        Message::ToolSelected(None),
+    ));
+    for kind in DrawingKind::ALL {
+        // Lines, shapes and levels, and notes and measures, in groups.
+        if matches!(kind, DrawingKind::Rectangle | DrawingKind::Text) {
+            tools = tools.push(rule::horizontal(1));
+        }
+        tools = tools.push(tool(
+            icons::for_tool(kind),
+            t.get(&format!("drawing-{}", kind.id())),
+            chart.tool() == Some(kind),
+            Message::ToolSelected(Some(kind)),
+        ));
+    }
+
+    let (lock_icon, lock_tip) = if chart.all_locked() {
+        (icons::LOCK, "drawing-unlock-all")
+    } else {
+        (icons::UNLOCK, "drawing-lock-all")
+    };
+    let (eye_icon, eye_tip) = if chart.drawings_hidden() {
+        (icons::EYE_OFF, "drawing-show-all")
+    } else {
+        (icons::EYE, "drawing-hide-all")
+    };
+    let clear_tip = if app.confirm_clear {
+        "drawing-clear-confirm"
+    } else {
+        "drawing-clear-all"
+    };
+    let clear_style = if app.confirm_clear {
+        button::danger
+    } else {
+        button::text
+    };
+    tools = tools
+        .push(rule::horizontal(1))
+        .push(tool(
+            icons::MAGNET,
+            t.get("drawing-magnet"),
+            chart.magnet(),
+            Message::MagnetToggled,
+        ))
+        .push(tool(
+            lock_icon,
+            t.get(lock_tip),
+            chart.all_locked(),
+            Message::DrawingsLockToggled,
+        ))
+        .push(tool(
+            eye_icon,
+            t.get(eye_tip),
+            chart.drawings_hidden(),
+            Message::DrawingsHiddenToggled,
+        ))
+        .push(tooltip(
+            button(icons::icon(icons::TRASH, 18.0))
+                .style(clear_style)
+                .padding([5, 8])
+                .on_press(Message::ClearDrawings),
+            hint(t.get(clear_tip)),
+            tooltip::Position::Right,
+        ));
+    // As narrow as its buttons; it scrolls only in a window too short for them.
+    scrollable(tools.width(Shrink)).width(Shrink).into()
+}
+
+/// The look of the picked drawing, with buttons to lock, copy and delete it.
+fn drawing_bar<'a>(app: &'a Fitil, drawing: &'a Drawing) -> Element<'a, Message> {
+    let t = &app.translations;
+    let mut bar = row![text(t.get(&format!("drawing-{}", drawing.kind.id()))).size(13)]
+        .spacing(10)
+        .align_y(iced::Center);
+    // A measure takes its colors from its direction.
+    if drawing.kind != DrawingKind::Measure {
+        let lines: Vec<Choice<LineStyle>> = LineStyle::ALL
+            .into_iter()
+            .map(|style| Choice {
+                value: style,
+                name: t.get(&format!("drawing-line-{}", style.id())),
+            })
+            .collect();
+        let current = lines
+            .iter()
+            .find(|choice| choice.value == drawing.line)
+            .cloned();
+        bar = bar
+            .push(
+                row(PALETTE.into_iter().map(|rgb| {
+                    dialogs::swatch(rgb, rgb == drawing.color, Message::DrawingColor(rgb))
+                }))
+                .spacing(3),
+            )
+            .push(pick_list([1u8, 2, 3, 4], Some(drawing.width), Message::DrawingWidth).width(60))
+            .push(
+                pick_list(lines, current, |choice: Choice<LineStyle>| {
+                    Message::DrawingLine(choice.value)
+                })
+                .width(110),
+            );
+    }
+    match drawing.kind {
+        DrawingKind::Text => {
+            bar = bar.push(
+                text_input(&t.get("drawing-text-placeholder"), &drawing.text)
+                    .on_input(Message::DrawingText)
+                    .width(220),
+            );
+        }
+        DrawingKind::FibRetracement => {
+            // The levels as typed, until they can be read.
+            let typed = app
+                .levels_text
+                .as_ref()
+                .filter(|(id, _)| *id == drawing.id)
+                .map(|(_, text)| text.clone());
+            let levels = typed.unwrap_or_else(|| {
+                let levels: Vec<String> =
+                    drawing.levels.iter().map(|l| studies::number(*l)).collect();
+                levels.join(" ")
+            });
+            bar = bar.push(text(t.get("drawing-levels")).size(13)).push(
+                text_input("0 0.5 1", &levels)
+                    .on_input(Message::DrawingLevels)
+                    .width(240),
+            );
+        }
+        _ => {}
+    }
+    let action = |glyph: char, key: &str, message: Message| {
+        tooltip(
+            button(icons::icon(glyph, 15.0))
+                .style(button::text)
+                .padding([3, 6])
+                .on_press(message),
+            hint(t.get(key)),
+            tooltip::Position::Bottom,
+        )
+    };
+    let (lock_icon, lock_tip) = if drawing.locked {
+        (icons::LOCK, "drawing-unlock")
+    } else {
+        (icons::UNLOCK, "drawing-lock")
+    };
+    bar = bar
+        .push(action(lock_icon, lock_tip, Message::DrawingLockToggled))
+        .push(action(
+            icons::COPY,
+            "drawing-copy",
+            Message::DuplicateDrawing,
+        ))
+        .push(action(
+            icons::TRASH,
+            "drawing-delete",
+            Message::DeleteDrawing,
+        ));
+    container(bar)
+        .padding([4, 8])
+        .style(container::bordered_box)
         .into()
 }
 

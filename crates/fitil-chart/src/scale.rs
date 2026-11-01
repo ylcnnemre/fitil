@@ -336,7 +336,11 @@ mod tests {
             .map(String::from),
             magnitudes: ["K", "M", "B"].map(String::from),
             day_suffix: "d".into(),
+            hour_suffix: "h".into(),
+            minute_suffix: "m".into(),
             loading: "Loading…".into(),
+            note: "Note".into(),
+            bars: "bars".into(),
         }
     }
 

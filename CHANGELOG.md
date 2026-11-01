@@ -52,6 +52,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   traded, with each symbol's price, daily change and exchange; arrow keys and Enter
   pick a result.
 - A chart opens at start on the most traded Bitcoin pair.
+- Drawing tools in a bar left of the chart: trend line, ray, extended line, horizontal
+  line and ray, vertical line, rectangle, parallel channel, Fibonacci retracement with
+  editable levels, text notes and a measure of price change, candles and time.
+  - Drawings are placed by clicking or dragging, picked and moved whole or by a point,
+    copied, locked and deleted; a magnet sticks points to candles' prices.
+  - Color, width and line style (solid, dashed, dotted) are set in a row above the chart;
+    horizontal lines show their price on the axis.
+  - Undo and redo (Ctrl+Z, Ctrl+Y) in the toolbar; Esc lets go of the tool or the
+    drawing, Delete removes it.
+  - Every drawing of a symbol can be hidden, locked or deleted at once.
+  - Drawings are pinned to times and prices, so they show in every timeframe, and are
+    saved per symbol in `user.sqlite`.
+- Icons from the Lucide set (ISC license), built into the program.
 
 ### Changed
 
