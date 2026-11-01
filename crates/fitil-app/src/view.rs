@@ -2,7 +2,7 @@
 //! a status bar. Symbols are picked in a search window (see `dialogs`), opened from the
 //! symbol's name in the toolbar or by typing on the chart.
 
-use fitil_chart::{ChartKind, PriceScale};
+use fitil_chart::{Chart, ChartKind, PriceScale};
 use fitil_core::{Drawing, DrawingKind, LineStyle, Timeframe};
 use fitil_indicators::PALETTE;
 use fitil_market::Study;
@@ -10,9 +10,11 @@ use iced::widget::{
     Column, button, column, container, pick_list, row, rule, scrollable, space, text, text_input,
     tooltip,
 };
-use iced::{Element, Fill, Shrink};
+use iced::{Border, Color, Element, Fill, Padding, Shadow, Shrink, Theme, Vector};
 
+use crate::flyout::flyout;
 use crate::i18n::{Language, Translations};
+use crate::tools::{self, ToolGroup};
 use crate::{
     Connection, Fitil, Load, Message, Selection, TIMEFRAME_CHOICES, dialogs, format, icons,
     storage, studies,
@@ -20,6 +22,10 @@ use crate::{
 
 /// Timeframes with a button of their own; the others are in a list beside them.
 const FAVORITE_TIMEFRAMES: [&str; 7] = ["1m", "5m", "15m", "1h", "4h", "1d", "1w"];
+/// The size of the drawing tools' icons.
+const TOOL_ICON: f32 = 18.0;
+/// The width of a tool group's menu.
+const MENU_WIDTH: f32 = 290.0;
 
 pub fn view(app: &Fitil) -> Element<'_, Message> {
     column![
@@ -271,14 +277,18 @@ fn chart_area(app: &Fitil) -> Element<'_, Message> {
 }
 
 /// The drawing tools down the left side, as in TradingView, then switches for every
-/// drawing of the symbol.
+/// drawing of the symbol. Related tools share a button that opens a menu of them.
 fn drawing_tools<'a>(app: &'a Fitil, selection: &'a Selection) -> Element<'a, Message> {
     let t = &app.translations;
     let chart = &selection.chart;
-    let tool = |glyph: char, tip: String, on: bool, message: Message| -> Element<'a, Message> {
+    let tool = |content: Element<'a, Message>,
+                tip: String,
+                on: bool,
+                message: Message|
+     -> Element<'a, Message> {
         let style = if on { button::primary } else { button::text };
         tooltip(
-            button(icons::icon(glyph, 18.0))
+            button(content)
                 .style(style)
                 .padding([5, 8])
                 .on_press(message),
@@ -287,25 +297,34 @@ fn drawing_tools<'a>(app: &'a Fitil, selection: &'a Selection) -> Element<'a, Me
         )
         .into()
     };
+    let glyph = |glyph: char| -> Element<'a, Message> { icons::icon(glyph, TOOL_ICON).into() };
+    let single = |kind: DrawingKind| {
+        let on = chart.tool() == Some(kind);
+        tool(
+            icons::tool(kind, TOOL_ICON, on),
+            t.get(&tools::name_key(kind)),
+            on,
+            Message::ToolSelected(Some(kind)),
+        )
+    };
 
     let mut tools = Column::new().spacing(2).push(tool(
-        icons::CURSOR,
+        glyph(icons::CURSOR),
         t.get("drawing-cursor"),
         chart.tool().is_none(),
         Message::ToolSelected(None),
     ));
-    for kind in DrawingKind::ALL {
-        // Lines, shapes and levels, and notes and measures, in groups.
-        if matches!(kind, DrawingKind::Rectangle | DrawingKind::Text) {
-            tools = tools.push(rule::horizontal(1));
-        }
-        tools = tools.push(tool(
-            icons::for_tool(kind),
-            t.get(&format!("drawing-{}", kind.id())),
-            chart.tool() == Some(kind),
-            Message::ToolSelected(Some(kind)),
-        ));
+    for group in ToolGroup::ALL {
+        tools = tools.push(tool_group(app, chart, group));
     }
+    // Shapes and levels, then notes and measures.
+    tools = tools
+        .push(rule::horizontal(1))
+        .push(single(DrawingKind::Rectangle))
+        .push(single(DrawingKind::FibRetracement))
+        .push(rule::horizontal(1))
+        .push(single(DrawingKind::Text))
+        .push(single(DrawingKind::Measure));
 
     let (lock_icon, lock_tip) = if chart.all_locked() {
         (icons::LOCK, "drawing-unlock-all")
@@ -330,25 +349,25 @@ fn drawing_tools<'a>(app: &'a Fitil, selection: &'a Selection) -> Element<'a, Me
     tools = tools
         .push(rule::horizontal(1))
         .push(tool(
-            icons::MAGNET,
+            glyph(icons::MAGNET),
             t.get("drawing-magnet"),
             chart.magnet(),
             Message::MagnetToggled,
         ))
         .push(tool(
-            lock_icon,
+            glyph(lock_icon),
             t.get(lock_tip),
             chart.all_locked(),
             Message::DrawingsLockToggled,
         ))
         .push(tool(
-            eye_icon,
+            glyph(eye_icon),
             t.get(eye_tip),
             chart.drawings_hidden(),
             Message::DrawingsHiddenToggled,
         ))
         .push(tooltip(
-            button(icons::icon(icons::TRASH, 18.0))
+            button(icons::icon(icons::TRASH, TOOL_ICON))
                 .style(clear_style)
                 .padding([5, 8])
                 .on_press(Message::ClearDrawings),
@@ -357,6 +376,118 @@ fn drawing_tools<'a>(app: &'a Fitil, selection: &'a Selection) -> Element<'a, Me
         ));
     // As narrow as its buttons; it scrolls only in a window too short for them.
     scrollable(tools.width(Shrink)).width(Shrink).into()
+}
+
+/// A tool group's button, showing the group's tool picked last, with the group's menu
+/// beside it while open.
+fn tool_group<'a>(app: &'a Fitil, chart: &'a Chart, group: ToolGroup) -> Element<'a, Message> {
+    let active = chart.tool().filter(|kind| group.contains(*kind));
+    let shown = active
+        .or_else(|| app.group_tools.get(&group).copied())
+        .unwrap_or(group.first());
+    let open = app.tool_menu == Some(group);
+    let picked = active.is_some();
+    let button = button(icons::group(shown, TOOL_ICON, picked))
+        .padding([5, 8])
+        .style(move |theme: &Theme, status| {
+            if picked {
+                button::primary(theme, status)
+            } else if open {
+                menu_row(theme, button::Status::Hovered)
+            } else {
+                button::text(theme, status)
+            }
+        })
+        .on_press(Message::ToolMenu((!open).then_some(group)));
+    // The name shows on hovering, but not over the open menu.
+    let anchor: Element<'a, Message> = if open {
+        button.into()
+    } else {
+        let name = app.translations.get(group.key());
+        tooltip(button, hint(name), tooltip::Position::Right).into()
+    };
+    let menu = open.then(|| tool_menu(app, chart, group));
+    flyout(anchor, menu, Message::ToolMenu(None)).into()
+}
+
+/// A tool group's menu: its sections, with each tool's picture, name and shortcut.
+fn tool_menu<'a>(app: &'a Fitil, chart: &'a Chart, group: ToolGroup) -> Element<'a, Message> {
+    let t = &app.translations;
+    let mut items = Column::new().width(MENU_WIDTH);
+    for section in group.sections() {
+        let heading = text(t.get(section.key)).size(11).style(text::secondary);
+        items = items.push(container(heading).padding(Padding {
+            top: 8.0,
+            right: 10.0,
+            bottom: 4.0,
+            left: 10.0,
+        }));
+        for &kind in section.tools {
+            let on = chart.tool() == Some(kind);
+            let shortcut = tools::shortcut(kind).map(|key| {
+                let keys =
+                    text(t.get_with("drawing-shortcut", &[("key", key.to_string())])).size(12);
+                if on {
+                    keys
+                } else {
+                    keys.style(text::secondary)
+                }
+            });
+            let content = row![
+                icons::tool(kind, TOOL_ICON, on),
+                text(t.get(&tools::name_key(kind))).size(13).width(Fill),
+                shortcut,
+            ]
+            .spacing(10)
+            .align_y(iced::Center);
+            let style = if on { button::primary } else { menu_row };
+            items = items.push(
+                button(content)
+                    .width(Fill)
+                    .padding([5, 10])
+                    .style(style)
+                    .on_press(Message::ToolSelected(Some(kind))),
+            );
+        }
+    }
+    container(scrollable(items).width(Shrink))
+        .padding(4)
+        .style(menu_box)
+        .into()
+}
+
+/// A row of a menu: plain, lit up under the mouse.
+fn menu_row(theme: &Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+    let lit = matches!(status, button::Status::Hovered | button::Status::Pressed);
+    button::Style {
+        background: lit.then(|| palette.background.weak.color.into()),
+        text_color: palette.background.base.text,
+        border: Border {
+            radius: 4.0.into(),
+            ..Border::default()
+        },
+        ..button::Style::default()
+    }
+}
+
+/// The box of a menu, standing out over the chart.
+fn menu_box(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+    container::Style {
+        background: Some(palette.background.base.color.into()),
+        border: Border {
+            color: palette.background.strong.color,
+            width: 1.0,
+            radius: 6.0.into(),
+        },
+        shadow: Shadow {
+            color: Color::BLACK.scale_alpha(0.3),
+            offset: Vector::new(0.0, 4.0),
+            blur_radius: 12.0,
+        },
+        ..container::Style::default()
+    }
 }
 
 /// The look of the picked drawing, with buttons to lock, copy and delete it.

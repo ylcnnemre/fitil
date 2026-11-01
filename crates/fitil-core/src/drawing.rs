@@ -26,16 +26,41 @@ pub enum DrawingKind {
     TrendLine,
     /// A line from the first point through the second, on to the edge.
     Ray,
+    /// A trend line with the price change, the candles, the time and the angle between
+    /// its points.
+    InfoLine,
     /// A line through two points, edge to edge.
     ExtendedLine,
+    /// A trend line with its angle to the horizontal.
+    TrendAngle,
     HorizontalLine,
     /// A horizontal line from its point on to the right.
     HorizontalRay,
     VerticalLine,
+    /// A horizontal and a vertical line through one point.
+    CrossLine,
     /// A box with two opposite corners.
     Rectangle,
     /// A line between two points and a parallel one through the third.
     ParallelChannel,
+    /// The straight line that best fits the closes between two times, with bands two
+    /// standard deviations away.
+    RegressionTrend,
+    /// A line between two points and a horizontal one at the third point's price.
+    FlatTopBottom,
+    /// A line between two points and a parallel one as long, starting at the third.
+    DisjointChannel,
+    /// Andrews' pitchfork: a median line from the first point to halfway between the
+    /// other two, and parallels through those.
+    Pitchfork,
+    /// A pitchfork whose median starts at the first point's time, halfway between the
+    /// first two points' prices.
+    SchiffPitchfork,
+    /// A pitchfork whose median starts halfway between the first two points.
+    ModifiedSchiffPitchfork,
+    /// A pitchfork whose median runs from halfway between the first two points through
+    /// the third, with parallels through the first two.
+    InsidePitchfork,
     /// Levels between two prices, such as 0.618 of the move.
     FibRetracement,
     /// A note.
@@ -45,15 +70,25 @@ pub enum DrawingKind {
 }
 
 impl DrawingKind {
-    pub const ALL: [DrawingKind; 11] = [
+    pub const ALL: [DrawingKind; 21] = [
         DrawingKind::TrendLine,
         DrawingKind::Ray,
+        DrawingKind::InfoLine,
         DrawingKind::ExtendedLine,
+        DrawingKind::TrendAngle,
         DrawingKind::HorizontalLine,
         DrawingKind::HorizontalRay,
         DrawingKind::VerticalLine,
+        DrawingKind::CrossLine,
         DrawingKind::Rectangle,
         DrawingKind::ParallelChannel,
+        DrawingKind::RegressionTrend,
+        DrawingKind::FlatTopBottom,
+        DrawingKind::DisjointChannel,
+        DrawingKind::Pitchfork,
+        DrawingKind::SchiffPitchfork,
+        DrawingKind::ModifiedSchiffPitchfork,
+        DrawingKind::InsidePitchfork,
         DrawingKind::FibRetracement,
         DrawingKind::Text,
         DrawingKind::Measure,
@@ -65,8 +100,15 @@ impl DrawingKind {
             DrawingKind::HorizontalLine
             | DrawingKind::HorizontalRay
             | DrawingKind::VerticalLine
+            | DrawingKind::CrossLine
             | DrawingKind::Text => 1,
-            DrawingKind::ParallelChannel => 3,
+            DrawingKind::ParallelChannel
+            | DrawingKind::FlatTopBottom
+            | DrawingKind::DisjointChannel
+            | DrawingKind::Pitchfork
+            | DrawingKind::SchiffPitchfork
+            | DrawingKind::ModifiedSchiffPitchfork
+            | DrawingKind::InsidePitchfork => 3,
             _ => 2,
         }
     }
@@ -76,12 +118,22 @@ impl DrawingKind {
         match self {
             DrawingKind::TrendLine => "trend-line",
             DrawingKind::Ray => "ray",
+            DrawingKind::InfoLine => "info-line",
             DrawingKind::ExtendedLine => "extended-line",
+            DrawingKind::TrendAngle => "trend-angle",
             DrawingKind::HorizontalLine => "horizontal-line",
             DrawingKind::HorizontalRay => "horizontal-ray",
             DrawingKind::VerticalLine => "vertical-line",
+            DrawingKind::CrossLine => "cross-line",
             DrawingKind::Rectangle => "rectangle",
             DrawingKind::ParallelChannel => "parallel-channel",
+            DrawingKind::RegressionTrend => "regression-trend",
+            DrawingKind::FlatTopBottom => "flat-top-bottom",
+            DrawingKind::DisjointChannel => "disjoint-channel",
+            DrawingKind::Pitchfork => "pitchfork",
+            DrawingKind::SchiffPitchfork => "schiff-pitchfork",
+            DrawingKind::ModifiedSchiffPitchfork => "modified-schiff-pitchfork",
+            DrawingKind::InsidePitchfork => "inside-pitchfork",
             DrawingKind::FibRetracement => "fib-retracement",
             DrawingKind::Text => "text",
             DrawingKind::Measure => "measure",
@@ -181,6 +233,24 @@ mod tests {
             assert_eq!(LineStyle::from_id(style.id()), Some(style));
         }
         assert_eq!(DrawingKind::from_id("spiral"), None);
+    }
+
+    #[test]
+    fn kinds_take_their_points() {
+        assert_eq!(DrawingKind::CrossLine.points(), 1);
+        assert_eq!(DrawingKind::InfoLine.points(), 2);
+        assert_eq!(DrawingKind::RegressionTrend.points(), 2);
+        for kind in [
+            DrawingKind::ParallelChannel,
+            DrawingKind::FlatTopBottom,
+            DrawingKind::DisjointChannel,
+            DrawingKind::Pitchfork,
+            DrawingKind::SchiffPitchfork,
+            DrawingKind::ModifiedSchiffPitchfork,
+            DrawingKind::InsidePitchfork,
+        ] {
+            assert_eq!(kind.points(), 3, "{kind:?}");
+        }
     }
 
     #[test]

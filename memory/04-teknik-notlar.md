@@ -152,7 +152,13 @@ Mimari "port ve adaptör" (hexagonal) düzenindedir. Kurallar ve bağımlılık 
 - **Odak:** `text_input(...).id("kimlik")` ve `iced::widget::operation::focus("kimlik")` bir `Task` döndürür.
 - **Pencere (modal):** `stack![taban, opaque(mouse_area(center(opaque(içerik)).style(…)).on_press(kapat))]`.
 - **Kaydırma çubuğu:** `scrollable(…).spacing(6)` çubuğu içeriğin üstüne değil yanına koyar.
-- **Diğer yardımcılar:** `row(…).wrap()` satırı sığmayınca alta geçirir. Ayrıca `tooltip(içerik, ipucu, tooltip::Position::Bottom)`, `checkbox(değer).label(…).on_toggle(…)` ve `button(…).on_press_maybe(Option<Message>)` kullanılıyor.
+- **Diğer yardımcılar:** `row(…).wrap()` satırı sığmayınca alta geçirir. Ayrıca `tooltip(içerik, ipucu, tooltip::Position::Bottom)`, `checkbox(değer).label(…).on_toggle(…)` ve `button(…).on_press_maybe(Option<Message>)` kullanılıyor. `Option<eleman>` doğrudan `push` edilebilir (`None` boş yer kaplar).
+- **Özel widget (`advanced` özelliği açık):** `iced::advanced::{Widget, overlay, layout, …}`. Örnek `fitil-app/src/flyout.rs`: bir düğme ve yanında açılan menü. Menü bir `overlay` olarak her şeyin üstünde çizilir.
+  - Örnek alınacak kaynak: iced'in `tooltip.rs` (konumlanan overlay) ve `float.rs` (olayları içeriğe ileten overlay).
+  - Overlay'in `mouse_interaction`'ı `None` dışında bir şey döndürünce alttaki widget'lar imleci görmez. Olayı `shell.capture_event()` ile yakalayınca alttakilere hiç gitmez.
+  - Overlay'in `layout`'u bütün pencerenin boyutunu alır; menüyü pencereye sığdırmak orada yapılır.
+- **Kesikli çizgi hatası (iced 0.14):** `Stroke` ile `LineDash` verilen bir yolda iced, ayrı parçaları tek çizgi gibi dolaşır. Bir kesik bir parçanın sonundan ötekinin başına geçince araya düz bir çizgi çekilir. Ayrıca kesik uzunluğundan kısa bir yol hiç çizilmez. Bu yüzden `shapes.rs` uç uca eklenen çizgileri tek yol, ayrı çizgileri ayrı yol yapar (`runs`).
+- **Canvas, düğme içinde:** `canvas::Canvas::new(program).width(…).height(…)` bir düğmenin içine konabilir. Tıklamayı düğme alır. Renk temadan `draw` içinde okunur (`theme.extended_palette()`).
 
 ## Grafik motoru (`fitil-chart`)
 
@@ -173,12 +179,15 @@ Mimari "port ve adaptör" (hexagonal) düzenindedir. Kurallar ve bağımlılık 
   - Uygulama bunları `chart.update` ile uygular, sonra `take_changed_drawings` ile değişeni alıp kaydeder.
   - Ara sürükleme adımları kaydedilmez, bırakınca (`FinishMove`) kaydedilir.
 - **Kayıt sırası:** `DrawingSaves` (`main.rs`) kayıtları teker teker yapar. Biri sürerken gelen aynı sembolün kaydı bekleyenle birleşir. Açılan sembollerin çizimleri `known`'da tutulur, geri dönünce okumadan gösterilir. Geç gelen okuma (`DrawingsLoaded`) yeni değişikliklerin üstüne yazmaz.
-- **Çizim:** Çizimler önbellekli katmana değil, her karede çizilen katmana çizilir. Bu yüzden sürüklerken mumlar yeniden çizilmez. Fiyat ekseni yazıları da bu katmanda; yatay çizgilerin kutuları için yer açılır.
+- **Çizim:** Çizimler önbellekli katmana değil, her karede çizilen katmana çizilir. Bu yüzden sürüklerken mumlar yeniden çizilmez. Fiyat ekseni yazıları da bu katmanda; yatay çizgilerin kutuları için yer açılır. Dikey çizgilerin ve kesişim çizgisinin tarihi zaman ekseninde (`line_times`).
+- **Tutamaçlar:** `Shape.handles[i]` her zaman `points[i]`'yi sürükler. Bir şekil tutamacı noktanın kendisinden başka yere koyabilir: düz tepe/dipte 3. nokta düz çizginin ucunda, regresyonda noktalar regresyon çizgisinin üstünde durur.
+- **Geometri (ekran koordinatlarında):** Kanallar ve dirgenler ekran noktalarıyla hesaplanır, böylece log ölçekte de düz görünür. Dirgenlerin orta çizgisi `pitchfork_frame`'de (dışarı açık; `icons.rs` de simgeleri bununla çiziyor). Regresyon ise fiyatlarla hesaplanır (kapanışlar, en küçük kareler, ±2 standart sapma, sapma `n-1`'e bölünür).
 - **Yeni çizim türü eklemek:**
-  1. `DrawingKind`'e ekle (`points`, `id`).
+  1. `DrawingKind`'e ekle (`ALL`, `points`, `id`).
   2. `shapes.rs` içindeki `shape` fonksiyonuna nasıl görüneceğini yaz. Tıklama bulma aynı şekli kullanır.
-  3. `icons::for_tool` içine bir Lucide simgesi koy.
+  3. Bir gruptaysa `fitil-app/src/tools.rs`'te bölümüne ekle ve `icons.rs`'teki `sketch` fonksiyonuna 18×18'lik resmini çiz. Grupsuz araçlar `icons::drawn` içinde bir Lucide simgesi alır.
   4. `drawing-<id>` çevirisini iki dile de ekle. Eksikse test yakalar.
+- **Araç grupları (`tools.rs`):** `ToolGroup` (şimdilik sadece `Lines`), bölümleri (`Section`: başlık anahtarı ve araçlar), Alt kısayolları (`shortcut`, `by_shortcut`). Grubun düğmesi en son seçilen aracı gösterir (`Fitil::group_tools`), açık menü `Fitil::tool_menu`.
 
 ## Simgeler (Lucide)
 
@@ -189,6 +198,7 @@ Mimari "port ve adaptör" (hexagonal) düzenindedir. Kurallar ve bağımlılık 
   - Simgenin kod noktası `codepoints.json`'dan bulunur. Dosya: https://cdn.jsdelivr.net/npm/lucide-static@1.66.0/font/codepoints.json
   - Kod noktası `icons.rs`'e sabit olarak eklenir.
   - Lucide sürümü değişirse kod noktaları da değişebilir. Yazı tipi ve sabitler birlikte güncellenmeli.
+- **Çizgi araçlarının simgeleri Lucide'den değil:** Lucide'de çoğunun karşılığı yok. `icons.rs`'teki `ToolIcon` canvas'ı bunları TradingView'daki gibi ince çizgiler ve noktalarda küçük boş dairelerle çizer (`sketch`). Çizgiler dairelerin içinden geçmez (`outside_circles`). Grup düğmesinin sağ alt köşesindeki küçük üçgen, arkasında menü olduğunu gösterir.
 
 
 ## İndikatörler (`fitil-indicators`)

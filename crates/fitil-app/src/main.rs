@@ -8,11 +8,13 @@
 mod dialogs;
 mod error;
 mod feed;
+mod flyout;
 mod format;
 mod i18n;
 mod icons;
 mod storage;
 mod studies;
+mod tools;
 mod view;
 
 use std::collections::hash_map::Entry;
@@ -37,6 +39,7 @@ use i18n::{Language, Translations};
 use iced::keyboard::{self, key::Named};
 use iced::widget::operation;
 use iced::{Element, Subscription, Task, Theme};
+use tools::ToolGroup;
 
 fn main() -> iced::Result {
     iced::application(Fitil::new, Fitil::update, Fitil::view)
@@ -92,6 +95,10 @@ struct Fitil {
     confirm_clear: bool,
     /// Fibonacci levels as typed, until they can be read, with the drawing they are for.
     levels_text: Option<(u64, String)>,
+    /// The drawing tool group whose menu is open.
+    tool_menu: Option<ToolGroup>,
+    /// The tool of each group picked last, which the group's button shows.
+    group_tools: HashMap<ToolGroup, DrawingKind>,
 }
 
 /// The drawings of the symbols opened, kept in step with the user's data.
@@ -282,8 +289,10 @@ enum Message {
     DeleteTemplate(String),
     /// The saved templates, after loading, saving or deleting.
     Templates(Result<Vec<Template>, MarketError>),
-    /// Esc: closes a window, or else drops what the chart is in the middle of.
+    /// Esc: closes a menu or a window, or else drops what the chart is in the middle of.
     Escape,
+    /// Opens a tool group's menu, or closes the one open.
+    ToolMenu(Option<ToolGroup>),
     ToolSelected(Option<DrawingKind>),
     MagnetToggled,
     DrawingsHiddenToggled,
@@ -345,6 +354,8 @@ impl Fitil {
             drawings: DrawingSaves::default(),
             confirm_clear: false,
             levels_text: None,
+            tool_menu: None,
+            group_tools: HashMap::new(),
         };
         let mut tasks: Vec<_> = app
             .markets
@@ -736,14 +747,27 @@ impl Fitil {
             },
             Message::Escape => {
                 self.confirm_clear = false;
+                if self.tool_menu.take().is_some() {
+                    return Task::none();
+                }
                 if self.dialog.is_some() {
                     self.dialog = None;
                 } else if let Some(selection) = &mut self.selection {
                     selection.chart.update(ChartMessage::Cancel);
                 }
             }
+            Message::ToolMenu(group) => {
+                self.confirm_clear = false;
+                self.tool_menu = group;
+            }
             Message::ToolSelected(tool) => {
                 self.confirm_clear = false;
+                self.tool_menu = None;
+                if let Some(kind) = tool
+                    && let Some(group) = ToolGroup::of(kind)
+                {
+                    self.group_tools.insert(group, kind);
+                }
                 if let Some(selection) = &mut self.selection {
                     selection.chart.set_tool(tool);
                 }
@@ -1003,6 +1027,8 @@ impl Fitil {
     }
 
     fn open_symbol_search(&mut self, search: String) -> Task<Message> {
+        // Typing with a tool menu open starts a search too; the menu gives way.
+        self.tool_menu = None;
         self.dialog = Some(Dialog::Symbols {
             search,
             kind: None,
@@ -1298,6 +1324,10 @@ fn key_message(
         keyboard::Key::Character(c) if modifiers.command() && c.eq_ignore_ascii_case("y") => {
             Some(Message::Redo)
         }
+        // Drawing tools, as in TradingView: Alt+T for a trend line and so on.
+        keyboard::Key::Character(c) if modifiers.alt() && !modifiers.command() => {
+            tools::by_shortcut(c).map(|kind| Message::ToolSelected(Some(kind)))
+        }
         _ if modifiers.command() || modifiers.alt() => None,
         _ => text
             .filter(|text| text.chars().all(char::is_alphanumeric))
@@ -1441,6 +1471,8 @@ mod tests {
             drawings: DrawingSaves::default(),
             confirm_clear: false,
             levels_text: None,
+            tool_menu: None,
+            group_tools: HashMap::new(),
         };
         (app, market)
     }
@@ -1766,14 +1798,85 @@ mod tests {
     fn every_drawing_tool_is_translated() {
         for language in Language::ALL {
             let t = Translations::new(language);
+            let groups = ToolGroup::ALL.iter().flat_map(|group| {
+                std::iter::once(group.key())
+                    .chain(group.sections().iter().map(|section| section.key))
+                    .map(String::from)
+            });
             let keys = DrawingKind::ALL
-                .map(|kind| format!("drawing-{}", kind.id()))
+                .map(tools::name_key)
                 .into_iter()
-                .chain(LineStyle::ALL.map(|style| format!("drawing-line-{}", style.id())));
+                .chain(LineStyle::ALL.map(|style| format!("drawing-line-{}", style.id())))
+                .chain(groups)
+                .chain(["drawing-shortcut".to_owned()]);
             for key in keys {
                 assert_ne!(t.get(&key), key, "{} has no {key}", language.code());
             }
+            let shortcut = t.get_with("drawing-shortcut", &[("key", "T".into())]);
+            assert_eq!(shortcut, "Alt + T");
         }
+    }
+
+    #[test]
+    fn tool_menus_open_pick_and_close() {
+        let (mut app, market) = app();
+        open_chart(&mut app, market, 10);
+        let _ = app.update(Message::ToolMenu(Some(ToolGroup::Lines)));
+        assert_eq!(app.tool_menu, Some(ToolGroup::Lines));
+        let _ = app.view();
+
+        // Picking a tool closes the menu; the group's button shows that tool from then on.
+        let _ = app.update(Message::ToolSelected(Some(DrawingKind::Pitchfork)));
+        assert_eq!(app.tool_menu, None);
+        assert_eq!(chart(&app).tool(), Some(DrawingKind::Pitchfork));
+        assert_eq!(
+            app.group_tools.get(&ToolGroup::Lines),
+            Some(&DrawingKind::Pitchfork)
+        );
+        let _ = app.view();
+
+        // Esc closes an open menu before it puts the tool away.
+        let _ = app.update(Message::ToolMenu(Some(ToolGroup::Lines)));
+        let _ = app.update(Message::Escape);
+        assert_eq!(app.tool_menu, None);
+        assert_eq!(chart(&app).tool(), Some(DrawingKind::Pitchfork));
+
+        // Typing starts a search, and an open menu gives way to it.
+        let _ = app.update(Message::ToolMenu(Some(ToolGroup::Lines)));
+        let _ = app.update(Message::KeyTyped("e".into()));
+        assert_eq!(app.tool_menu, None);
+        assert!(app.dialog.is_some());
+    }
+
+    #[test]
+    fn alt_and_a_letter_pick_a_tool() {
+        let press = |letter: &str, modifiers| {
+            let event = keyboard::Event::KeyPressed {
+                key: keyboard::Key::Character(letter.into()),
+                modified_key: keyboard::Key::Character(letter.into()),
+                physical_key: keyboard::key::Physical::Code(keyboard::key::Code::KeyT),
+                location: keyboard::Location::Standard,
+                modifiers,
+                text: None,
+                repeat: false,
+            };
+            key_message(
+                iced::Event::Keyboard(event),
+                iced::event::Status::Ignored,
+                iced::window::Id::unique(),
+            )
+        };
+        let alt = keyboard::Modifiers::ALT;
+        assert!(matches!(
+            press("t", alt),
+            Some(Message::ToolSelected(Some(DrawingKind::TrendLine)))
+        ));
+        assert!(matches!(
+            press("c", alt),
+            Some(Message::ToolSelected(Some(DrawingKind::CrossLine)))
+        ));
+        assert!(press("q", alt).is_none());
+        assert!(press("t", alt | keyboard::Modifiers::COMMAND).is_none());
     }
 
     fn parse(args: &[&str]) -> Option<OpenRequest> {

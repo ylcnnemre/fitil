@@ -43,6 +43,7 @@ Tüm kararlar 30 Ekim 2026'da, ilk oturumda verildi.
 | 16 | Eklenecek borsalar: OKX, Hyperliquid, HTX (Huobi), Bybit, BtcTurk | Faz 2. Her biri §6.3'teki adımlarla eklenir. |
 | 17 | Arayüz TradingView düzeninde: solda sembol listesi yok, ekran grafiğe ayrılır, sembol bir arama penceresinden seçilir (31 Ekim 2026) | Proje sahibi TradingView'ın ekran görüntüsünü gönderip şunu dedi: "Arayüz TradingView gibi olmalı, solda coinlerin listelenmesine gerek yok, coin aratınca modal açılsın." İzleme listesi (Adım 6) sağda açılıp kapanan bir panel olacak. `docs/TASARIM.md` §4.5. |
 | 18 | Simgeler: Lucide simge seti (ISC lisansı), yazı tipi dosyası olarak programa gömülü (1 Kasım 2026) | Claude Lucide'i önerdi, proje sahibi "Lucide ile başla" dedi. Alternatif simgeleri kendimiz çizmekti. Dosya `assets/fonts/lucide.ttf`, lisansı yanında. |
+| 19 | Sol çizim çubuğu TradingView'daki gibi gruplu: gruba tıklayınca sağda bir menü açılır, araç oradan seçilir (1 Kasım 2026) | Proje sahibi TradingView'ın çizgi menüsünün ekran görüntüsünü gönderip şunu dedi: "Önce fotoğraftaki elementlerden başlayalım, sonra diğerlerine geçeriz." İlk grup çizgiler, kanallar ve dirgenler (17 araç, 10'u yeni). Lucide'de karşılığı olmayan çizgi simgeleri programda çiziliyor. Fibonacci, şekiller, notlar ve ölçüm grupları sonra. `docs/TASARIM.md` §4.4. |
 
 ## Fazlar (özet)
 

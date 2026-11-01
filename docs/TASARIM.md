@@ -91,17 +91,37 @@ Alış/Satış Hacmi ve CVD için ek veri indirmek gerekmez. Binance her mumla b
 
 ### 4.4 Çizim araçları
 
-- **Çizgiler:** Trend çizgisi, ışın, uzatılmış çizgi, yatay çizgi, yatay ışın, dikey çizgi.
-- **Şekiller:** Dikdörtgen, paralel kanal.
+- **Çizgiler:** Trend çizgisi, ışın, bilgi çizgisi, uzatılmış çizgi, trend açısı, yatay çizgi, yatay ışın, dikey çizgi, kesişim çizgisi.
+- **Kanallar:** Paralel kanal, regresyon trendi, düz tepe/dip, ayrık kanal.
+- **Dirgenler:** Dirgen, Schiff dirgeni, modifiye Schiff dirgeni, iç dirgen.
+- **Şekiller:** Dikdörtgen.
 - **Fibonacci:** Fibonacci düzeltme. Seviyeleri düzenlenebilir.
 - **Diğer:** Metin notu, ölçüm aracı (fiyat farkı, yüzde değişim, mum sayısı ve süre).
+- **Araçların tanımı** (TradingView'daki karşılıklarına göre):
+  - **Bilgi çizgisi:** Trend çizgisi ve altında bir kutu: fiyat farkı, yüzde değişim, mum sayısı, süre ve açı.
+  - **Trend açısı:** Trend çizgisi, başladığı noktadan çıkan yatay bir kılavuz çizgi ve aradaki açı (derece). Açı ekrandaki eğime göre hesaplanır, bu yüzden yakınlaştırınca değişir.
+  - **Kesişim çizgisi:** Tek tıkla, bir noktadan geçen yatay ve dikey çizgi. Fiyatı fiyat ekseninde, tarihi zaman ekseninde görünür. Dikey çizginin tarihi de zaman ekseninde görünür.
+  - **Regresyon trendi:** İki nokta arasındaki mumların kapanışlarından geçen doğrusal regresyon çizgisi. İki yanında 2 standart sapma uzaklıkta bantlar ve uyumu gösteren Pearson R değeri.
+  - **Düz tepe/dip:** İki noktalı eğik bir çizgi ve üçüncü noktanın fiyatında, aynı zaman aralığında yatay bir sınır. Arası boyalı.
+  - **Ayrık kanal:** İki noktalı bir çizgi ve üçüncü noktadan başlayan, ona paralel ve aynı uzunlukta ikinci bir çizgi. İki çizgi farklı zamanlarda başlayabilir.
+  - **Dirgenler** üç noktayla çizilir. Orta çizgi ve iki yanındaki paralel çizgiler (dişler) sağa doğru uzar. Dişlerin arası boyalı.
+    - Dirgen: orta çizgi 1. noktadan 2. ve 3. noktanın ortasına gider. Dişler 2. ve 3. noktadan geçer.
+    - Schiff dirgeni: orta çizgi 1. noktanın zamanından ve 1. ile 2. noktanın fiyat ortasından başlar.
+    - Modifiye Schiff dirgeni: orta çizgi 1. ile 2. noktanın tam ortasından başlar.
+    - İç dirgen: orta çizgi 1. ile 2. noktanın ortasından 3. noktaya gider. Dişler 1. ve 2. noktadan geçer.
 - **Mıknatıs modu:** Çizimin uçları mumun açılış, en yüksek, en düşük veya kapanış noktasına yapışır.
 - **Düzenleme:**
   - Seçme, taşıma, uç noktalarını sürükleme, kopyalama ve silme.
   - Kilitleme ve gizleme.
   - Geri al / yinele (Ctrl+Z / Ctrl+Y).
 - **Stil:** Renk, kalınlık, çizgi tipi (düz, kesikli, noktalı).
-- **Yerleşim:** Araçlar TradingView'daki gibi grafiğin solunda dikey bir çubuktadır; mıknatıs, tümünü kilitle, gizle ve sil düğmeleri de orada. Seçili çizimin rengi, kalınlığı, çizgi tipi, metni ya da Fibonacci seviyeleri grafiğin üstündeki satırdan değiştirilir. Geri al / yinele düğmeleri üst araç çubuğundadır.
+- **Yerleşim:**
+  - Araçlar TradingView'daki gibi grafiğin solunda dikey bir çubuktadır. Mıknatıs, tümünü kilitle, gizle ve sil düğmeleri de orada.
+  - Çizgiler, kanallar ve dirgenler tek bir düğmede toplanır. Düğmeye tıklayınca sağında bir menü açılır, araç oradan seçilir. Menüde bölüm başlıkları (Çizgiler, Kanallar, Dirgenler), her aracın simgesi, adı ve varsa kısayolu bulunur.
+  - Düğme, bu gruptan en son seçilen aracın simgesini gösterir. Menü dışarı tıklayınca, Esc'ye basınca ya da düğmeye yeniden tıklayınca kapanır.
+  - Dikdörtgen, Fibonacci, metin notu ve ölçüm şimdilik ayrı düğmelerdir. Bunlar da ileride kendi gruplarına alınacak.
+  - Seçili çizimin rengi, kalınlığı, çizgi tipi, metni ya da Fibonacci seviyeleri grafiğin üstündeki satırdan değiştirilir. Geri al / yinele düğmeleri üst araç çubuğundadır.
+- **Kısayollar** (TradingView'daki gibi): Alt+T trend çizgisi, Alt+H yatay çizgi, Alt+J yatay ışın, Alt+V dikey çizgi, Alt+C kesişim çizgisi.
 - **Kayıt:**
   - Çizimler sembole bağlıdır ve tüm zaman dilimlerinde görünür. Aynı adlı spot ve vadeli pariteler ayrı semboldür, çizimleri de ayrıdır (TradingView gibi).
   - Otomatik kaydedilir, uygulama kapansa da kaybolmaz.

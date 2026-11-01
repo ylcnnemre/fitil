@@ -13,4 +13,5 @@ mod shapes;
 mod study;
 
 pub use chart::{Chart, ChartKind, ChartLabels, ChartMessage, PriceScale};
+pub use shapes::pitchfork_frame;
 pub use study::{BarColors, Plot, PlotFill, PlotStyle, Study, StudyPlacement, ValueFormat};

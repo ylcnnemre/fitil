@@ -217,8 +217,8 @@ struct Crosshair {
     pane: Rectangle,
     value: String,
     time: String,
-    time_left: f32,
-    time_width: f32,
+    /// The left edge and width of the time's box.
+    time_span: (f32, f32),
 }
 
 /// The values of `plot` drawn between the bars at the plot's edges, if any.
@@ -895,22 +895,30 @@ impl Chart {
             let time =
                 scale::crosshair_time(self.candles[index].open_time, self.timeframe, &self.labels);
             let x = self.x(layout, index);
-            let time_width = time.chars().count() as f32 * 7.0 + 16.0;
             Crosshair {
                 x,
                 y: point.y,
                 pane,
                 value,
-                time_left: (x - time_width / 2.0).clamp(0.0, (plot.width - time_width).max(0.0)),
-                time_width,
+                time_span: time_box_span(plot, x, &time),
                 time,
             }
         });
 
-        // The prices of horizontal lines drawn by the user, on the axis.
+        // The prices of horizontal lines drawn by the user, on the axis, and the times of
+        // vertical ones.
         let line_prices: Vec<(f32, Anchor, Color)> = visible
             .map(|v| self.line_prices(layout, v))
             .unwrap_or_default();
+        let line_times: Vec<((f32, f32), String, Color)> = visible
+            .map(|_| self.line_times(layout))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(x, time, color)| {
+                let time = scale::crosshair_time(time, self.timeframe, &self.labels);
+                (time_box_span(plot, x, &time), time, color)
+            })
+            .collect();
 
         // Axis labels, except where a box goes.
         let mut boxes = Vec::new();
@@ -965,10 +973,11 @@ impl Chart {
         for tick in &ticks.time {
             let x = self.x(layout, tick.index);
             let half = tick.label.chars().count() as f32 * TEXT_SIZE * CHAR_WIDTH / 2.0 + 4.0;
-            let under_box = crosshair.as_ref().is_some_and(|crosshair| {
-                x + half > crosshair.time_left
-                    && x - half < crosshair.time_left + crosshair.time_width
-            });
+            let under = |(left, width): (f32, f32)| x + half > left && x - half < left + width;
+            let under_box = crosshair
+                .as_ref()
+                .is_some_and(|crosshair| under(crosshair.time_span))
+                || line_times.iter().any(|(span, _, _)| under(*span));
             if x > 20.0 && x < plot.width - 20.0 && !under_box {
                 let color = if tick.major {
                     text
@@ -990,6 +999,16 @@ impl Chart {
             for (y, anchor, color) in &line_prices {
                 let price = self.price_label(v, v.mapper.to_scale(anchor.price));
                 axis_box(frame, plot, *y, &[price], *color, readable_on(*color));
+            }
+            for (span, time, color) in &line_times {
+                time_box(
+                    frame,
+                    bottom,
+                    *span,
+                    time.clone(),
+                    *color,
+                    readable_on(*color),
+                );
             }
         }
 
@@ -1026,20 +1045,14 @@ impl Chart {
                 box_color,
                 text,
             );
-            frame.fill_rectangle(
-                Point::new(crosshair.time_left, bottom + 1.0),
-                Size::new(crosshair.time_width, TIME_AXIS_HEIGHT - 2.0),
-                box_color,
-            );
-            frame.fill_text(label(
+            time_box(
+                frame,
+                bottom,
+                crosshair.time_span,
                 crosshair.time,
-                Point::new(
-                    crosshair.time_left + crosshair.time_width / 2.0,
-                    bottom + TIME_AXIS_HEIGHT / 2.0,
-                ),
+                box_color,
                 text,
-                Horizontal::Center,
-            ));
+            );
         }
 
         // Legends: the hovered candle, or the newest one.
@@ -1181,7 +1194,7 @@ fn fill_area(frame: &mut Frame, area: &mut Vec<(Point, Point)>, color: Color) {
 }
 
 /// `-0.00` and the like, written as `0.00`.
-fn without_negative_zero(text: String) -> String {
+pub(crate) fn without_negative_zero(text: String) -> String {
     match text.strip_prefix('-') {
         Some(rest) if !rest.chars().any(|c| matches!(c, '1'..='9')) => rest.to_owned(),
         _ => text,
@@ -1217,6 +1230,36 @@ fn axis_box_span(pane: Rectangle, y: f32, lines: usize) -> (f32, f32) {
     let lowest = (pane.y + pane.height - height).max(pane.y);
     let top = (y - AXIS_LINE_HEIGHT / 2.0 - 2.0).clamp(pane.y, lowest);
     (top, top + height)
+}
+
+/// The left edge and width of a box for `text` on the time axis, centered on `x` and kept
+/// within the plot's width.
+fn time_box_span(plot: Rectangle, x: f32, text: &str) -> (f32, f32) {
+    let width = text.chars().count() as f32 * 7.0 + 16.0;
+    let left = (x - width / 2.0).clamp(0.0, (plot.width - width).max(0.0));
+    (left, width)
+}
+
+/// A filled label on the time axis, which starts at `bottom`.
+fn time_box(
+    frame: &mut Frame,
+    bottom: f32,
+    (left, width): (f32, f32),
+    text: String,
+    background: Color,
+    color: Color,
+) {
+    frame.fill_rectangle(
+        Point::new(left, bottom + 1.0),
+        Size::new(width, TIME_AXIS_HEIGHT - 2.0),
+        background,
+    );
+    frame.fill_text(label(
+        text,
+        Point::new(left + width / 2.0, bottom + TIME_AXIS_HEIGHT / 2.0),
+        color,
+        Horizontal::Center,
+    ));
 }
 
 /// A filled label on the axis of `pane`, centered on `y`, with one or more lines.
@@ -1734,6 +1777,81 @@ mod tests {
         // Hidden drawings cannot be picked.
         chart.set_drawings_hidden(true);
         assert_eq!(chart.drawing_at(&layout, &visible, near), None);
+    }
+
+    #[test]
+    fn lines_and_channels_take_their_shapes_from_their_points() {
+        const HOUR: i64 = 3_600_000;
+        let mut chart = chart(50, Vec::new());
+        let layout = chart.layout(size());
+        let visible = chart.visible(&layout).unwrap();
+        let plot = layout.plot;
+        let at = |hours: i64, price: f64| Anchor {
+            time: hours * HOUR,
+            price,
+        };
+        let point = |chart: &Chart, anchor| chart.point_of(&layout, &visible, anchor);
+
+        // A cross line spans the plot both ways.
+        let cross = Drawing::new(1, DrawingKind::CrossLine, vec![at(40, 11.5)]);
+        let shape = chart.shape(&layout, &visible, &cross);
+        let p = point(&chart, at(40, 11.5));
+        assert_eq!(
+            shape.lines,
+            vec![
+                (Point::new(0.0, p.y), Point::new(plot.width, p.y)),
+                (Point::new(p.x, 0.0), Point::new(p.x, plot.height)),
+            ]
+        );
+
+        // A flat top or bottom's third handle is where its flat line ends.
+        let flat = Drawing::new(
+            2,
+            DrawingKind::FlatTopBottom,
+            vec![at(10, 10.0), at(20, 11.0), at(35, 9.5)],
+        );
+        let shape = chart.shape(&layout, &visible, &flat);
+        let end = Point::new(point(&chart, at(20, 11.0)).x, point(&chart, at(35, 9.5)).y);
+        assert_eq!(shape.handles[2], end);
+        assert_eq!(shape.lines[1].1, end);
+
+        // A disjoint channel's second line starts at the third point, as long as the first.
+        let disjoint = Drawing::new(
+            3,
+            DrawingKind::DisjointChannel,
+            vec![at(10, 10.0), at(20, 11.0), at(25, 9.5)],
+        );
+        let shape = chart.shape(&layout, &visible, &disjoint);
+        let (start, finish) = shape.lines[1];
+        assert_eq!(start, point(&chart, at(25, 9.5)));
+        assert!(finish.distance(point(&chart, at(35, 10.5))) < 0.01);
+
+        // Closes that do not change fit a flat line, with the handles on it.
+        let regression = Drawing::new(
+            4,
+            DrawingKind::RegressionTrend,
+            vec![at(30, 9.0), at(10, 12.0)],
+        );
+        let shape = chart.shape(&layout, &visible, &regression);
+        let y = chart.y(&layout, &visible, 11.0);
+        assert_eq!(
+            shape.handles,
+            vec![
+                Point::new(point(&chart, at(30, 0.0)).x, y),
+                Point::new(point(&chart, at(10, 0.0)).x, y),
+            ]
+        );
+
+        // The cross line's price and time are on the axes, as is a vertical line's time.
+        let vertical = Drawing::new(5, DrawingKind::VerticalLine, vec![at(20, 11.0)]);
+        chart.set_drawings(vec![cross, flat, disjoint, regression, vertical]);
+        assert_eq!(chart.line_prices(&layout, &visible).len(), 1);
+        let times: Vec<i64> = chart
+            .line_times(&layout)
+            .iter()
+            .map(|(_, time, _)| *time)
+            .collect();
+        assert_eq!(times, vec![40 * HOUR, 20 * HOUR]);
     }
 
     #[test]

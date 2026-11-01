@@ -22,7 +22,7 @@ fitil-market = { path = "crates/fitil-market" }
 fitil-store = { path = "crates/fitil-store" }
 fluent-bundle = "0.16"
 futures = "0.3"
-iced = { version = "0.14", features = ["canvas", "tokio"] }
+iced = { version = "0.14", features = ["advanced", "canvas", "tokio"] }
 # rustls with `ring` as the crypto provider; the default aws-lc provider is avoided for licensing.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
 rusqlite = { version = "0.41", features = ["bundled"] }

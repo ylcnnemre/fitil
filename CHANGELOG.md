@@ -65,6 +65,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - Drawings are pinned to times and prices, so they show in every timeframe, and are
     saved per symbol in `user.sqlite`.
 - Icons from the Lucide set (ISC license), built into the program.
+- The drawing bar groups related tools as TradingView does: the lines button opens a menu
+  beside it, in sections for lines, channels and pitchforks, with each tool's picture,
+  name and shortcut. The button shows the tool picked last.
+  - New lines: info line (price change, candles, time and angle), trend angle and cross
+    line (its price and date on the axes; vertical lines show their date too).
+  - New channels: regression trend (the closes' least-squares line with bands two
+    standard deviations away, and Pearson's R), flat top/bottom and disjoint channel.
+  - Pitchforks: Andrews', Schiff, modified Schiff and inside.
+  - Alt+T, Alt+H, Alt+J, Alt+V and Alt+C pick the trend line, horizontal line, horizontal
+    ray, vertical line and cross line.
 
 ### Changed
 
@@ -85,3 +95,5 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - Axis labels no longer show through the crosshair's and the last price's boxes.
+- Dashed and dotted drawings with more than one line, such as Fibonacci levels and
+  channels, no longer get stray lines joining their lines.

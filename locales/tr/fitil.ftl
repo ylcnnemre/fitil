@@ -52,14 +52,30 @@ chart-minute-suffix = dk
 ## Çizim araçları (grafiğin solundaki çubuk ve seçili çizimin satırı)
 
 drawing-cursor = Seç ve taşı
+drawing-group-lines = Çizgi araçları
+drawing-section-lines = ÇİZGİLER
+drawing-section-channels = KANALLAR
+drawing-section-pitchforks = DİRGENLER
+# Bir aracın klavye kısayolu, örneğin "Alt + T".
+drawing-shortcut = Alt + { $key }
 drawing-trend-line = Trend çizgisi
 drawing-ray = Işın
+drawing-info-line = Bilgi çizgisi
 drawing-extended-line = Uzatılmış çizgi
+drawing-trend-angle = Trend açısı
 drawing-horizontal-line = Yatay çizgi
 drawing-horizontal-ray = Yatay ışın
 drawing-vertical-line = Dikey çizgi
+drawing-cross-line = Kesişim çizgisi
 drawing-rectangle = Dikdörtgen
 drawing-parallel-channel = Paralel kanal
+drawing-regression-trend = Regresyon trendi
+drawing-flat-top-bottom = Düz tepe/dip
+drawing-disjoint-channel = Ayrık kanal
+drawing-pitchfork = Dirgen
+drawing-schiff-pitchfork = Schiff dirgeni
+drawing-modified-schiff-pitchfork = Modifiye Schiff dirgeni
+drawing-inside-pitchfork = İç dirgen
 drawing-fib-retracement = Fibonacci düzeltmesi
 drawing-text = Metin notu
 drawing-measure = Ölçüm

@@ -52,14 +52,30 @@ chart-minute-suffix = m
 ## Drawing tools (the bar left of the chart and the picked drawing's row)
 
 drawing-cursor = Pick and move
+drawing-group-lines = Line tools
+drawing-section-lines = LINES
+drawing-section-channels = CHANNELS
+drawing-section-pitchforks = PITCHFORKS
+# A tool's keyboard shortcut, such as "Alt + T".
+drawing-shortcut = Alt + { $key }
 drawing-trend-line = Trend line
 drawing-ray = Ray
+drawing-info-line = Info line
 drawing-extended-line = Extended line
+drawing-trend-angle = Trend angle
 drawing-horizontal-line = Horizontal line
 drawing-horizontal-ray = Horizontal ray
 drawing-vertical-line = Vertical line
+drawing-cross-line = Cross line
 drawing-rectangle = Rectangle
 drawing-parallel-channel = Parallel channel
+drawing-regression-trend = Regression trend
+drawing-flat-top-bottom = Flat top/bottom
+drawing-disjoint-channel = Disjoint channel
+drawing-pitchfork = Pitchfork
+drawing-schiff-pitchfork = Schiff pitchfork
+drawing-modified-schiff-pitchfork = Modified Schiff pitchfork
+drawing-inside-pitchfork = Inside pitchfork
 drawing-fib-retracement = Fibonacci retracement
 drawing-text = Text note
 drawing-measure = Measure

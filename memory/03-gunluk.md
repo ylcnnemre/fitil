@@ -355,3 +355,46 @@ Proje sahibi "Evet, başla" dedi. Oturum uzun sürdüğü için arada bir kez ö
 Geçici satırlar silindi. Proje sahibi test penceresini yine kullandı: grafik tipi listesini açtı, imleci gezdirdi.
 
 **Testler:** 154 test (`fitil-indicators` 30, `fitil-chart` 29, `fitil-market` 25, `fitil-app` 23, `fitil-core` 15, `fitil-store` 14, `fitil-exchange` 9, `fitil-binance` 9) ve 3 canlı test. fmt ve clippy temiz. Test penceresi `target/verify` içindeki programı kilitlediği için son çalıştırmada `--lib --bins` kullanıldı.
+
+### Çizim araçları TradingView düzeninde: açılır menü ve 10 yeni araç (kodlandı, proje sahibinin denemesi bekleniyor)
+
+**Nasıl başladı:** Proje sahibi TradingView'ın çizgi menüsünün ekran görüntüsünü gönderdi: "Çizim araçlarını TradingView'daki gibi yapalım. Soldaki elementlere tıklayınca sağda bir menü açılıyor, fotoğraftaki gibi, oradan seçim yapılıyor. Önce fotoğraftaki elementlerden başlayalım, sonra diğerlerine geçeriz." (karar 19)
+
+**Araştırma:** Yeni araçların nasıl çizildiği TradingView'ın yardım sayfalarından okundu (Auto Pitchfork, Inside pitchfork, Disjoint channel, Flat top/bottom, Info line, Trend angle, Regression trend, Crossline). Sayfaların söylemediği yerlerde seçilenler:
+- İç dirgenin dişleri: 1. ve 2. noktadan geçen paraleller.
+- Ayrık kanalın ikinci çizgisi: 3. noktadan başlıyor, ilkiyle aynı eğimde ve uzunlukta.
+- Düz tepe/dipte düz çizgi eğik çizgiyle aynı zaman aralığında.
+- Regresyonda bantlar ±2 standart sapma, kaynak kapanış.
+
+**Yapılanlar:**
+1. **`docs/TASARIM.md` §4.4:** yeni araçlar, tanımları, menü düzeni, kısayollar.
+2. **`fitil-core`:** `DrawingKind` 21 türe çıktı: bilgi çizgisi, trend açısı, kesişim çizgisi, regresyon trendi, düz tepe/dip, ayrık kanal ve dört dirgen.
+3. **`fitil-chart`:**
+   - `shapes.rs`'te yeni şekiller.
+   - Bilgi çizgisinin kutusu: fiyat farkı, yüzde, mum, süre, açı.
+   - Trend açısı: yay ve derece.
+   - Regresyon: `regression` fonksiyonu, Pearson R etiketi.
+   - Dirgenler: `pitchfork_frame`.
+   - Dikey çizgi ve kesişim çizgisinin tarihi zaman ekseninde (`line_times`, `time_box`).
+4. **`fitil-app`:**
+   - `flyout.rs`: düğmenin yanında açılan menü. iced'in overlay yapısıyla yapıldı (`advanced` özelliği açıldı; yeni indirme yok).
+   - `tools.rs`: gruplar, bölümler (Çizgiler, Kanallar, Dirgenler), Alt kısayolları.
+   - `icons.rs`: çizgi araçlarının TradingView benzeri simgeleri canvas'la çiziliyor. Kullanılmayan Lucide sabitleri silindi.
+   - `view.rs`: sol çubukta imleç, çizgi grubu düğmesi, dikdörtgen, Fibonacci, not, ölçüm, sonra mıknatıs, kilit, gizle, sil. Menü dışarı tıklayınca, Esc'ye basınca ya da düğmeye yeniden tıklayınca kapanıyor. Yazmaya başlamak (sembol arama) da kapatıyor.
+   - Alt+T trend çizgisi, Alt+H yatay çizgi, Alt+J yatay ışın, Alt+V dikey çizgi, Alt+C kesişim çizgisi.
+
+**Ekran denetiminde bulunanlar ve düzeltilenler:**
+- **Kesikli çizgilerde fazladan çizgi:** iced bir yolun ayrı parçalarını kesikli çizerken aralarını birleştiriyordu. Kesikli ya da noktalı seçilen Fibonacci seviyeleri ve kanallarda çapraz çizgiler çıkabiliyordu (Adım 5'ten kalma). Artık uç uca eklenen çizgiler tek yol, ayrı çizgiler ayrı yol olarak çiziliyor.
+- **Trend açısının yayı görünmüyordu:** Yay kılavuz (kesikli) çizgi olarak çiziliyordu, kısa parçaları kesik boyuna yetmiyordu. Artık çizimin kendi çizgisiyle çiziliyor.
+
+**Ekranda doğrulananlar** (yeni bir test penceresi, önbellek kopyası `cache-copy2`, geçici `TEMP-VERIFY` satırlarıyla beş örnek takım):
+- açık menü, bölüm başlıkları, simgeler, kısayollar ve grup düğmesinin köşe işareti;
+- bilgi çizgisi kutusu ("-617.01 (-0.76%)", "25 mum, 1g 1s", "-13.30°");
+- trend açısı ("-41.40°"), regresyon (Pearson R "-0.65"), kesişim çizgisinin fiyatı ve tarihi;
+- düz tepe/dip (3. tutamaç düz çizginin ucunda), ayrık kanal, dikey çizginin tarihi;
+- dört dirgen;
+- kesikli Fibonacci, regresyon ve trend açısı.
+
+Geçici satırlar silindi. Önceki test penceresine (pid 12000) dokunulmadı.
+
+**Testler:** 166 test (`fitil-chart` 34, `fitil-indicators` 30, `fitil-app` 29, `fitil-market` 25, `fitil-core` 16, `fitil-store` 14, `fitil-exchange` 9, `fitil-binance` 9) ve 3 canlı test. fmt ve clippy temiz.
