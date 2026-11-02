@@ -401,7 +401,7 @@ Geçici satırlar silindi. Önceki test penceresine (pid 12000) dokunulmadı.
 
 ## 2 Kasım 2026
 
-### Kaydırma akıcılığı: ölçüm ve mumları çizme yönteminin değişmesi (kodlandı, proje sahibinin denemesi bekleniyor)
+### Kaydırma akıcılığı: ölçüm ve mumları çizme yönteminin değişmesi (tamamlandı)
 
 **Nasıl başladı:** Proje sahibi yeni sürümü açtıktan sonra sordu: "x ve y ekseninde grafiği çektiğim zaman TradingView kadar akıcı çalışmıyor sanki, neden olabilir?"
 
@@ -434,4 +434,6 @@ Geçici satırlar silindi. Önceki test penceresine (pid 12000) dokunulmadı.
 
 **Dikey sürükleme:** Grafiği dikey çekerken ilk 12 piksel bilerek yok sayılıyor (`VERTICAL_DRAG_THRESHOLD`, yatay kaydırırken grafik yanlışlıkla oynamasın diye). Proje sahibine, TradingView'da böyle bir bekleme yoksa kaldırılabileceği söylendi.
 
-**Testler:** 166 test ve 3 canlı test. fmt ve clippy temiz.
+**Testler:** 166 test ve 3 canlı test. fmt ve clippy temiz. Commit `ec71f3b`, GitHub'da derleme üç sistemde geçti.
+
+**Proje sahibinin denemesi:** Release sürümde grafiği kaydırdı ve "Evet, akıcı" dedi.
