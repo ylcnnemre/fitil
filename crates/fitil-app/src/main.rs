@@ -6,6 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod dialogs;
+mod drawing_dialog;
 mod error;
 mod feed;
 mod flyout;
@@ -22,17 +23,18 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
+use drawing_dialog::{ColorTarget, DrawingWindow, Look, Setting, Tab};
 use error::AppError;
 use fitil_chart::{Chart, ChartKind, ChartLabels, ChartMessage, PriceScale};
 use fitil_core::{
-    Candle, Drawing, DrawingKind, ExchangeId, LineStyle, Market, MarketKind, SeriesKey, Symbol,
-    Timeframe,
+    Candle, Drawing, DrawingKind, DrawingStyle, ExchangeId, LineStyle, Market, MarketKind,
+    SeriesKey, Symbol, Timeframe,
 };
 use fitil_exchange::{Exchange, Features, FeedCommand, FeedEvent, Topic};
 use fitil_indicators::{Rgb, Settings, Value};
 use fitil_market::{
-    Board, LiveUpdate, Loaded, MarketError, MarketSnapshot, Match, Series, SharedStore,
-    SharedUserData, Studies, StudyId, TEMPLATE_NAME_MAX, Template,
+    Board, DrawingLooks, DrawingTemplate, LiveUpdate, Loaded, MarketError, MarketSnapshot, Match,
+    Series, SharedStore, SharedUserData, Studies, StudyId, TEMPLATE_NAME_MAX, Template,
 };
 use futures::channel::mpsc;
 use i18n::{Language, Translations};
@@ -93,8 +95,8 @@ struct Fitil {
     drawings: DrawingSaves,
     /// Deleting every drawing waits for a second click.
     confirm_clear: bool,
-    /// Fibonacci levels as typed, until they can be read, with the drawing they are for.
-    levels_text: Option<(u64, String)>,
+    /// The looks saved for drawings: what new ones start with, and named templates.
+    drawing_looks: DrawingLooks,
     /// The drawing tool group whose menu is open.
     tool_menu: Option<ToolGroup>,
     /// The tool of each group picked last, which the group's button shows.
@@ -133,6 +135,8 @@ enum Dialog {
         study: StudyId,
         drafts: BTreeMap<&'static str, String>,
     },
+    /// The settings of the drawing the chart has open for them.
+    Drawing(DrawingWindow),
 }
 
 struct MarketState {
@@ -303,7 +307,18 @@ enum Message {
     DrawingWidth(u8),
     DrawingLine(LineStyle),
     DrawingText(String),
-    DrawingLevels(String),
+    /// Opens the picked drawing's settings.
+    OpenDrawingSettings,
+    DrawingTab(Tab),
+    DrawingSetting(Setting),
+    /// Opens the palette of one of the drawing's colors, or closes it.
+    DrawingPicker(Option<ColorTarget>),
+    /// Keeps the changes made in the drawing's settings and closes them.
+    DrawingSettingsDone,
+    DrawingLook(Look),
+    /// The saved looks of drawings, once loaded.
+    DrawingLooks(Result<DrawingLooks, MarketError>),
+    DrawingLookSaved(Result<(), MarketError>),
     /// Locks or unlocks the picked drawing.
     DrawingLockToggled,
     DuplicateDrawing,
@@ -353,7 +368,7 @@ impl Fitil {
             pending_open: OpenRequest::from_args(std::env::args()),
             drawings: DrawingSaves::default(),
             confirm_clear: false,
-            levels_text: None,
+            drawing_looks: DrawingLooks::default(),
             tool_menu: None,
             group_tools: HashMap::new(),
         };
@@ -366,6 +381,10 @@ impl Fitil {
             tasks.push(Task::perform(
                 fitil_market::load_templates(user.clone()),
                 Message::Templates,
+            ));
+            tasks.push(Task::perform(
+                fitil_market::load_drawing_looks(user.clone()),
+                Message::DrawingLooks,
             ));
         }
         (app, Task::batch(tasks))
@@ -486,8 +505,15 @@ impl Fitil {
             }
             Message::Chart(message) => {
                 self.confirm_clear = false;
+                let edit = match message {
+                    ChartMessage::EditDrawing(id) => Some(id),
+                    _ => None,
+                };
                 if let Some(selection) = &mut self.selection {
                     selection.chart.update(message);
+                }
+                if let Some(id) = edit {
+                    self.open_drawing_settings(id);
                 }
                 return Task::batch([self.load_older_if_needed(), self.save_drawings()]);
             }
@@ -599,7 +625,7 @@ impl Fitil {
                 });
                 return operation::focus(dialogs::INDICATOR_SEARCH_ID);
             }
-            Message::CloseDialog => self.dialog = None,
+            Message::CloseDialog => self.close_dialog(),
             Message::IndicatorSearchChanged(text) => {
                 if let Some(Dialog::Indicators { search, .. }) = &mut self.dialog {
                     *search = text;
@@ -750,8 +776,17 @@ impl Fitil {
                 if self.tool_menu.take().is_some() {
                     return Task::none();
                 }
+                // A palette or the template menu of a drawing's settings closes first.
+                if let Some(Dialog::Drawing(window)) = &mut self.dialog
+                    && (window.picker.is_some() || window.templates_open)
+                {
+                    window.picker = None;
+                    window.templates_open = false;
+                    window.template_name = None;
+                    return Task::none();
+                }
                 if self.dialog.is_some() {
-                    self.dialog = None;
+                    self.close_dialog();
                 } else if let Some(selection) = &mut self.selection {
                     selection.chart.update(ChartMessage::Cancel);
                 }
@@ -761,6 +796,10 @@ impl Fitil {
                 self.tool_menu = group;
             }
             Message::ToolSelected(tool) => {
+                // A shortcut typed in a window is not for the chart behind it.
+                if self.dialog.is_some() {
+                    return Task::none();
+                }
                 self.confirm_clear = false;
                 self.tool_menu = None;
                 if let Some(kind) = tool
@@ -802,23 +841,64 @@ impl Fitil {
                 return self.save_drawings();
             }
             Message::DrawingColor(color) => {
-                return self.edit_drawing(|drawing| drawing.color = color);
+                return self.edit_drawing(|drawing| drawing.style.color = color);
             }
             Message::DrawingWidth(width) => {
-                return self.edit_drawing(|drawing| drawing.width = width);
+                return self.edit_drawing(|drawing| drawing.style.width = width);
             }
-            Message::DrawingLine(line) => return self.edit_drawing(|drawing| drawing.line = line),
+            Message::DrawingLine(line) => {
+                return self.edit_drawing(|drawing| drawing.style.line = line);
+            }
             Message::DrawingText(text) => return self.edit_drawing(|drawing| drawing.text = text),
-            Message::DrawingLevels(text) => {
-                let Some(id) = self.selected_drawing().map(|drawing| drawing.id) else {
-                    return Task::none();
-                };
-                // Levels are written apart by spaces, so that a comma can be a decimal one.
-                let levels: Option<Vec<f64>> =
-                    text.split_whitespace().map(studies::parse_number).collect();
-                self.levels_text = Some((id, text));
-                if let Some(levels) = levels.filter(|levels| !levels.is_empty()) {
-                    return self.edit_drawing(|drawing| drawing.levels = levels);
+            Message::OpenDrawingSettings => {
+                if let Some(id) = self.selected_drawing().map(|drawing| drawing.id) {
+                    self.open_drawing_settings(id);
+                }
+            }
+            Message::DrawingTab(tab) => {
+                if let Some(Dialog::Drawing(window)) = &mut self.dialog {
+                    window.tab = tab;
+                    window.picker = None;
+                    window.templates_open = false;
+                }
+            }
+            Message::DrawingSetting(setting) => {
+                if let (Some(Dialog::Drawing(window)), Some(selection)) =
+                    (&mut self.dialog, &mut self.selection)
+                {
+                    selection
+                        .chart
+                        .edit_open(|drawing| window.apply(drawing, setting));
+                }
+            }
+            Message::DrawingPicker(target) => {
+                if let Some(Dialog::Drawing(window)) = &mut self.dialog {
+                    window.picker = target;
+                    window.templates_open = false;
+                }
+            }
+            Message::DrawingSettingsDone => {
+                if matches!(self.dialog, Some(Dialog::Drawing(_))) {
+                    self.dialog = None;
+                    if let Some(selection) = &mut self.selection {
+                        selection.chart.finish_edit(true);
+                    }
+                    return self.save_drawings();
+                }
+            }
+            Message::DrawingLook(look) => return self.drawing_look(look),
+            Message::DrawingLooks(result) => match result {
+                Ok(looks) => {
+                    if let Some(selection) = &mut self.selection {
+                        selection.chart.set_drawing_defaults(looks.defaults.clone());
+                    }
+                    self.drawing_looks = looks;
+                }
+                Err(error) => self.show_drawing_error(error),
+            },
+            Message::DrawingLookSaved(result) => {
+                if let Err(error) = result {
+                    self.show_drawing_error(error);
                 }
             }
             Message::DrawingLockToggled => {
@@ -895,6 +975,130 @@ impl Fitil {
             selection.chart.edit_selected(change);
         }
         self.save_drawings()
+    }
+
+    /// Opens the settings of drawing `id`, if the chart has it and no window is open.
+    fn open_drawing_settings(&mut self, id: u64) {
+        if self.dialog.is_some() {
+            return;
+        }
+        if let Some(selection) = &mut self.selection
+            && selection.chart.begin_edit(id)
+        {
+            self.tool_menu = None;
+            self.confirm_clear = false;
+            self.dialog = Some(Dialog::Drawing(DrawingWindow::default()));
+        }
+    }
+
+    /// Closes the window open. A drawing's settings put the drawing back as it was.
+    fn close_dialog(&mut self) {
+        if let Some(Dialog::Drawing(_)) = self.dialog.take()
+            && let Some(selection) = &mut self.selection
+        {
+            selection.chart.finish_edit(false);
+        }
+    }
+
+    /// Does what was picked in the template menu of a drawing's settings.
+    fn drawing_look(&mut self, look: Look) -> Task<Message> {
+        let (Some(Dialog::Drawing(window)), Some(selection)) =
+            (&mut self.dialog, &mut self.selection)
+        else {
+            return Task::none();
+        };
+        let Some(drawing) = selection.chart.edited_drawing() else {
+            return Task::none();
+        };
+        let (kind, style) = (drawing.kind, drawing.style.clone());
+        match look {
+            Look::Menu(open) => {
+                window.templates_open = open;
+                window.template_name = None;
+                window.picker = None;
+                return Task::none();
+            }
+            Look::Naming(name) => {
+                let first = window.template_name.replace(name).is_none();
+                return if first {
+                    operation::focus(drawing_dialog::TEMPLATE_NAME_ID)
+                } else {
+                    Task::none()
+                };
+            }
+            _ => {}
+        }
+        // Anything else picked closes the menu.
+        window.templates_open = false;
+        let name = window.template_name.take();
+        let looks = &mut self.drawing_looks;
+        let restyle = match &look {
+            Look::Apply(name) => looks
+                .templates
+                .iter()
+                .find(|template| template.kind == kind && template.name == *name)
+                .map(|template| template.style.clone()),
+            Look::ApplyDefault => Some(selection.chart.default_style(kind)),
+            Look::Fitil => Some(DrawingStyle::of(kind)),
+            _ => None,
+        };
+        if let Some(style) = restyle {
+            selection.chart.edit_open(|drawing| drawing.style = style);
+            window.drafts.clear();
+            return Task::none();
+        }
+        // Looks are kept for this run even when the user's data cannot be written.
+        let user = self.user_data.as_ref().ok().cloned();
+        match look {
+            Look::Save => {
+                let Some(name) = name.as_deref().and_then(Template::clean_name) else {
+                    return Task::none();
+                };
+                let template = DrawingTemplate { kind, name, style };
+                looks
+                    .templates
+                    .retain(|saved| saved.kind != kind || saved.name != template.name);
+                looks.templates.push(template.clone());
+                looks.templates.sort_by_cached_key(|template| {
+                    (template.kind.id(), template.name.to_lowercase())
+                });
+                user.map_or_else(Task::none, |user| {
+                    Task::perform(
+                        fitil_market::save_drawing_template(user, template),
+                        Message::DrawingLookSaved,
+                    )
+                })
+            }
+            Look::Delete(name) => {
+                looks
+                    .templates
+                    .retain(|saved| saved.kind != kind || saved.name != name);
+                user.map_or_else(Task::none, |user| {
+                    Task::perform(
+                        fitil_market::delete_drawing_template(user, kind, name),
+                        Message::DrawingLookSaved,
+                    )
+                })
+            }
+            Look::SaveDefault => {
+                looks.defaults.insert(kind, style.clone());
+                selection.chart.set_drawing_defaults(looks.defaults.clone());
+                user.map_or_else(Task::none, |user| {
+                    Task::perform(
+                        fitil_market::save_drawing_default(user, kind, Some(style)),
+                        Message::DrawingLookSaved,
+                    )
+                })
+            }
+            _ => Task::none(),
+        }
+    }
+
+    /// Shows on the chart that drawings or their looks could not be read or saved.
+    fn show_drawing_error(&mut self, error: MarketError) {
+        if let Some(selection) = &mut self.selection {
+            selection.error = Some(AppError::user_data(error));
+        }
     }
 
     /// Saves the chart's drawings if they changed. Saves run one at a time and in order,
@@ -1177,6 +1381,7 @@ impl Fitil {
                     chart_labels(&self.translations),
                 );
                 chart.set_show_volume(self.show_volume);
+                chart.set_drawing_defaults(self.drawing_looks.defaults.clone());
                 (chart, None)
             }
         };
@@ -1198,7 +1403,6 @@ impl Fitil {
         let drawings = if same_symbol {
             Task::none()
         } else {
-            self.levels_text = None;
             self.show_drawings()
         };
         Task::batch([self.open_series(), drawings])
@@ -1470,7 +1674,7 @@ mod tests {
             pending_open: None,
             drawings: DrawingSaves::default(),
             confirm_clear: false,
-            levels_text: None,
+            drawing_looks: DrawingLooks::default(),
             tool_menu: None,
             group_tools: HashMap::new(),
         };
@@ -1710,14 +1914,14 @@ mod tests {
             1,
             "waiting saves of a symbol merge"
         );
-        assert_eq!(app.drawings.waiting[0].2[0].width, 4);
+        assert_eq!(app.drawings.waiting[0].2[0].style.width, 4);
         let _ = app.update(Message::DrawingsSaved(Ok(())));
         assert!(app.drawings.saving && app.drawings.waiting.is_empty());
 
         let _ = app.update(Message::Undo);
-        assert_eq!(chart(&app).drawings()[0].width, 2);
+        assert_eq!(chart(&app).drawings()[0].style.width, 2);
         let _ = app.update(Message::Redo);
-        assert_eq!(chart(&app).drawings()[0].width, 4);
+        assert_eq!(chart(&app).drawings()[0].style.width, 4);
 
         // Deleting all takes a second click.
         let _ = app.update(Message::ClearDrawings);
@@ -1763,26 +1967,9 @@ mod tests {
     }
 
     #[test]
-    fn levels_and_notes_are_typed_in() {
+    fn notes_are_typed_in() {
         let (mut app, market) = app();
         open_chart(&mut app, market, 10);
-        let _ = app.update(Message::ToolSelected(Some(DrawingKind::FibRetracement)));
-        for (hour, price) in [(1, 100.0), (5, 110.0)] {
-            let anchor = fitil_core::Anchor {
-                time: hour * 3_600_000,
-                price,
-            };
-            let _ = app.update(Message::Chart(ChartMessage::PlacePoint(anchor)));
-        }
-        let _ = app.view();
-        // Spaces apart, with a comma or a point before the decimals.
-        let _ = app.update(Message::DrawingLevels("0 0,5 1.618".into()));
-        assert_eq!(chart(&app).drawings()[0].levels, [0.0, 0.5, 1.618]);
-        // What cannot be read stays in the box and changes nothing.
-        let _ = app.update(Message::DrawingLevels("0 x".into()));
-        assert_eq!(chart(&app).drawings()[0].levels, [0.0, 0.5, 1.618]);
-        assert_eq!(app.levels_text.as_ref().unwrap().1, "0 x");
-
         let _ = app.update(Message::ToolSelected(Some(DrawingKind::Text)));
         let anchor = fitil_core::Anchor {
             time: 2 * 3_600_000,
@@ -1792,6 +1979,199 @@ mod tests {
         let _ = app.update(Message::DrawingText("Destek".into()));
         assert_eq!(chart(&app).selected_drawing().unwrap().text, "Destek");
         let _ = app.view();
+    }
+
+    /// Draws a Fibonacci retracement from 100 at the first hour to 110 at the fifth.
+    fn draw_fib(app: &mut Fitil) {
+        let _ = app.update(Message::ToolSelected(Some(DrawingKind::FibRetracement)));
+        for (hour, price) in [(1, 100.0), (5, 110.0)] {
+            let anchor = fitil_core::Anchor {
+                time: hour * 3_600_000,
+                price,
+            };
+            let _ = app.update(Message::Chart(ChartMessage::PlacePoint(anchor)));
+        }
+    }
+
+    fn drawing_window(app: &Fitil) -> &DrawingWindow {
+        match &app.dialog {
+            Some(Dialog::Drawing(window)) => window,
+            _ => panic!("no drawing settings are open"),
+        }
+    }
+
+    #[test]
+    fn drawing_settings_show_changes_and_cancel_them() {
+        use drawing_dialog::Field;
+        let (mut app, market) = app();
+        open_chart(&mut app, market, 10);
+        draw_fib(&mut app);
+        // A double click on the drawing opens its settings.
+        let id = chart(&app).drawings()[0].id;
+        let _ = app.update(Message::Chart(ChartMessage::EditDrawing(id)));
+        assert_eq!(drawing_window(&app).tab, Tab::Style);
+        let _ = app.view();
+
+        let level = |app: &Fitil| chart(app).drawings()[0].style.levels[1];
+        let _ = app.update(Message::DrawingPicker(Some(ColorTarget::Level(1))));
+        let _ = app.view();
+        let yellow = Rgb::hex(0xFFEB3B);
+        let _ = app.update(Message::DrawingSetting(Setting::Color(
+            ColorTarget::Level(1),
+            yellow,
+        )));
+        assert_eq!(level(&app).color, yellow);
+        assert_eq!(drawing_window(&app).picker, None);
+        // With a comma before the decimals; what cannot be read changes nothing.
+        let typed =
+            |text: &str| Message::DrawingSetting(Setting::Typed(Field::Level(1), text.into()));
+        let _ = app.update(typed("0,25"));
+        assert_eq!(level(&app).value, 0.25);
+        let _ = app.update(typed("0,2x"));
+        assert_eq!(level(&app).value, 0.25);
+        for tab in [Tab::Coordinates, Tab::Visibility] {
+            let _ = app.update(Message::DrawingTab(tab));
+            let _ = app.view();
+        }
+        // A tool's shortcut typed in the window is not for the chart.
+        let _ = app.update(Message::ToolSelected(Some(DrawingKind::Ray)));
+        assert_eq!(chart(&app).tool(), None);
+
+        // Esc drops every change; nothing new is saved.
+        let _ = app.update(Message::Escape);
+        assert!(app.dialog.is_none());
+        assert_eq!(
+            chart(&app).drawings()[0].style,
+            DrawingStyle::of(DrawingKind::FibRetracement)
+        );
+        assert!(app.drawings.waiting.is_empty());
+    }
+
+    #[test]
+    fn drawing_settings_keep_their_changes_in_one_step() {
+        use drawing_dialog::Field;
+        let (mut app, market) = app();
+        open_chart(&mut app, market, 10);
+        draw_line(&mut app, 105.0);
+        // The settings button of the picked drawing's row opens them too.
+        let _ = app.update(Message::OpenDrawingSettings);
+        let _ = app.update(Message::DrawingSetting(Setting::Width(4)));
+        let _ = app.update(Message::DrawingSetting(Setting::Typed(
+            Field::Price(0),
+            "107,5".into(),
+        )));
+        let _ = app.update(Message::DrawingSettingsDone);
+        assert!(app.dialog.is_none());
+        let line = |app: &Fitil| {
+            let drawing = &chart(app).drawings()[0];
+            (drawing.style.width, drawing.points[0].price)
+        };
+        assert_eq!(line(&app), (4, 107.5));
+        assert_eq!(app.drawings.waiting.len(), 1, "the change is saved");
+        let _ = app.update(Message::Undo);
+        assert_eq!(line(&app), (2, 105.0));
+    }
+
+    #[test]
+    fn drawing_looks_are_saved_applied_and_given_to_new_drawings() {
+        let (mut app, market) = app();
+        open_chart(&mut app, market, 10);
+        draw_line(&mut app, 105.0);
+        let width = |app: &Fitil, index: usize| chart(app).drawings()[index].style.width;
+        let _ = app.update(Message::OpenDrawingSettings);
+        let _ = app.update(Message::DrawingSetting(Setting::Width(3)));
+
+        // A look saved under a name, trimmed.
+        let _ = app.update(Message::DrawingLook(Look::Menu(true)));
+        let _ = app.update(Message::DrawingLook(Look::Naming(String::new())));
+        let _ = app.update(Message::DrawingLook(Look::Naming("  Kalın ".into())));
+        let _ = app.view();
+        let _ = app.update(Message::DrawingLook(Look::Save));
+        let templates = &app.drawing_looks.templates;
+        assert_eq!(templates.len(), 1);
+        assert_eq!(templates[0].kind, DrawingKind::HorizontalLine);
+        assert_eq!(templates[0].name, "Kalın");
+        assert!(!drawing_window(&app).templates_open);
+
+        // Applied back after a change; Fitil's look applied.
+        let _ = app.update(Message::DrawingSetting(Setting::Width(1)));
+        let _ = app.update(Message::DrawingLook(Look::Apply("Kalın".into())));
+        assert_eq!(width(&app, 0), 3);
+        let _ = app.update(Message::DrawingLook(Look::Fitil));
+        assert_eq!(width(&app, 0), 2);
+
+        // Saved as the default: going back to it gives it, and new lines start with it.
+        let _ = app.update(Message::DrawingLook(Look::Apply("Kalın".into())));
+        let _ = app.update(Message::DrawingLook(Look::SaveDefault));
+        let _ = app.update(Message::DrawingLook(Look::Fitil));
+        let _ = app.update(Message::DrawingLook(Look::ApplyDefault));
+        assert_eq!(width(&app, 0), 3);
+        let _ = app.update(Message::DrawingSettingsDone);
+        draw_line(&mut app, 106.0);
+        assert_eq!(width(&app, 1), 3);
+
+        // Deleting the template keeps the default.
+        let _ = app.update(Message::OpenDrawingSettings);
+        let _ = app.update(Message::DrawingLook(Look::Menu(true)));
+        let _ = app.view();
+        let _ = app.update(Message::DrawingLook(Look::Delete("Kalın".into())));
+        assert!(app.drawing_looks.templates.is_empty());
+        assert!(
+            app.drawing_looks
+                .defaults
+                .contains_key(&DrawingKind::HorizontalLine)
+        );
+    }
+
+    #[test]
+    fn drawing_settings_are_translated() {
+        use fitil_core::{Extend, LabelAlign, LabelSide, TimeUnit};
+        for language in Language::ALL {
+            let t = Translations::new(language);
+            let keys = [
+                "drawing-settings",
+                "drawing-tab-style",
+                "drawing-tab-coordinates",
+                "drawing-tab-visibility",
+                "drawing-line",
+                "drawing-levels-line",
+                "drawing-words",
+                "drawing-background",
+                "drawing-opacity",
+                "drawing-extend",
+                "drawing-one-color",
+                "drawing-reverse",
+                "drawing-prices",
+                "drawing-levels",
+                "drawing-levels-values",
+                "drawing-levels-percent",
+                "drawing-labels",
+                "drawing-measure-colors",
+                "drawing-point",
+                "drawing-price",
+                "drawing-time",
+                "drawing-time-placeholder",
+                "drawing-visibility-limits",
+                "drawing-cancel",
+                "drawing-ok",
+                "drawing-template",
+                "drawing-template-save-as",
+                "drawing-template-name",
+                "drawing-template-save",
+                "drawing-default-save",
+                "drawing-default-apply",
+                "drawing-fitil-look",
+            ]
+            .map(String::from)
+            .into_iter()
+            .chain(Extend::ALL.map(|extend| format!("drawing-extend-{}", extend.id())))
+            .chain(LabelAlign::ALL.map(|align| format!("drawing-label-{}", align.id())))
+            .chain(LabelSide::ALL.map(|side| format!("drawing-label-{}", side.id())))
+            .chain(TimeUnit::ALL.map(|unit| format!("drawing-visibility-{}", unit.id())));
+            for key in keys {
+                assert_ne!(t.get(&key), key, "{} has no {key}", language.code());
+            }
+        }
     }
 
     #[test]

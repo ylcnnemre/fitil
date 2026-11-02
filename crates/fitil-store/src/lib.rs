@@ -9,7 +9,7 @@
 
 mod user;
 
-pub use user::{StoredTemplate, UserData};
+pub use user::{StoredDrawingTemplate, StoredTemplate, UserData};
 
 use std::path::Path;
 

@@ -1,7 +1,9 @@
 //! Where drawings go on screen: their lines, areas and words, drawn on the price pane and
 //! picked with the mouse.
 
-use fitil_core::{Anchor, Candle, Drawing, DrawingKind, LineStyle, Rgb};
+use fitil_core::{
+    Anchor, Candle, Drawing, DrawingKind, LabelAlign, LabelSide, LevelLabels, LineStyle, Rgb,
+};
 use iced::alignment::{Horizontal, Vertical};
 use iced::widget::canvas::{Frame, LineDash, Path, Stroke, Text};
 use iced::{Color, Pixels, Point, Rectangle, Size, Vector};
@@ -39,12 +41,20 @@ const GUIDE: [f32; 2] = [4.0, 4.0];
 /// A drawing as it is on screen.
 pub(crate) struct Shape {
     pub color: Color,
+    /// How the drawing's areas are filled: its color, as strong as its style says;
+    /// transparent when they are not filled.
+    pub fill: Color,
     /// Lines in the drawing's style.
     pub lines: Vec<(Point, Point)>,
-    /// Thin dashed lines: a channel's middle, a retracement's move.
+    /// Lines in the drawing's style, each in a color of its own: a retracement's levels.
+    pub tinted: Vec<(Point, Point, Color)>,
+    /// Thin dashed lines: a channel's middle.
     pub guides: Vec<(Point, Point)>,
-    /// Filled areas, each with how strongly it is filled.
-    pub areas: Vec<(Vec<Point>, f32)>,
+    /// A thin line in a color and style of its own: a retracement's move.
+    pub trend: Option<(Point, Point, Color, LineStyle)>,
+    /// Areas, each in its color. Transparent ones are not painted, but still pick the
+    /// drawing when clicked.
+    pub areas: Vec<(Vec<Point>, Color)>,
     pub labels: Vec<Label>,
     /// Where the drawing's points are, to drag them.
     pub handles: Vec<Point>,
@@ -102,11 +112,20 @@ pub(crate) fn readable_on(background: Color) -> Color {
 }
 
 impl Shape {
-    fn new(color: Color) -> Self {
+    fn new(drawing: &Drawing) -> Self {
+        let color = color(drawing.style.color);
+        let strength = if drawing.style.fill {
+            f32::from(drawing.style.opacity) / 100.0
+        } else {
+            0.0
+        };
         Self {
             color,
+            fill: color.scale_alpha(strength),
             lines: Vec::new(),
+            tinted: Vec::new(),
             guides: Vec::new(),
+            trend: None,
             areas: Vec::new(),
             labels: Vec::new(),
             handles: Vec::new(),
@@ -119,13 +138,19 @@ impl Shape {
         self.lines
             .iter()
             .chain(&self.guides)
-            .any(|&(from, to)| distance_to_segment(point, from, to) <= reach)
+            .copied()
+            .chain(self.tinted.iter().map(|&(from, to, _)| (from, to)))
+            .chain(self.trend.map(|(from, to, _, _)| (from, to)))
+            .any(|(from, to)| distance_to_segment(point, from, to) <= reach)
             || self.areas.iter().any(|(area, _)| inside(point, area))
             || self.labels.iter().any(|label| label.area.contains(point))
     }
 
     fn paint(&self, frame: &mut Frame, width: f32, line: LineStyle) {
-        for (area, alpha) in &self.areas {
+        for (area, fill) in &self.areas {
+            if fill.a <= 0.0 {
+                continue;
+            }
             if let Some((first, rest)) = area.split_first() {
                 let path = Path::new(|path| {
                     path.move_to(*first);
@@ -134,7 +159,7 @@ impl Shape {
                     }
                     path.close();
                 });
-                frame.fill(&path, self.color.scale_alpha(*alpha));
+                frame.fill(&path, *fill);
             }
         }
         let stroke_each = |frame: &mut Frame, lines: &[(Point, Point)], stroke: Stroke<'_>| {
@@ -148,22 +173,20 @@ impl Shape {
                 frame.stroke(&path, stroke);
             }
         };
-        let segments_style = match line {
-            LineStyle::Solid => &[][..],
-            LineStyle::Dashed => &DASHED[..],
-            LineStyle::Dotted => &DOTTED[..],
-        };
-        stroke_each(
-            frame,
-            &self.lines,
-            Stroke {
-                line_dash: LineDash {
-                    segments: segments_style,
-                    offset: 0,
-                },
-                ..Stroke::default().with_color(self.color).with_width(width)
+        let styled = |color: Color, width: f32, line: LineStyle| Stroke {
+            line_dash: LineDash {
+                segments: dashes(line),
+                offset: 0,
             },
-        );
+            ..Stroke::default().with_color(color).with_width(width)
+        };
+        stroke_each(frame, &self.lines, styled(self.color, width, line));
+        for &(from, to, color) in &self.tinted {
+            stroke_each(frame, &[(from, to)], styled(color, width, line));
+        }
+        if let Some((from, to, color, line)) = self.trend {
+            stroke_each(frame, &[(from, to)], styled(color, 1.0, line));
+        }
         stroke_each(
             frame,
             &self.guides,
@@ -205,6 +228,15 @@ impl Shape {
             &handles,
             Stroke::default().with_color(self.color).with_width(2.0),
         );
+    }
+}
+
+/// The dashes of a line style.
+fn dashes(line: LineStyle) -> &'static [f32] {
+    match line {
+        LineStyle::Solid => &[],
+        LineStyle::Dashed => &DASHED,
+        LineStyle::Dotted => &DOTTED,
     }
 }
 
@@ -426,10 +458,9 @@ impl Chart {
         visible: &Visible,
         point: Point,
     ) -> Option<(u64, Option<usize>)> {
-        if self.drawings_hidden {
-            return None;
-        }
-        if let Some(drawing) = self.selected_drawing() {
+        if let Some(drawing) = self.selected_drawing()
+            && self.shows(drawing)
+        {
             let shape = self.shape(layout, visible, drawing);
             let handle = shape
                 .handles
@@ -439,14 +470,24 @@ impl Chart {
                 return Some((drawing.id, handle));
             }
         }
-        self.drawings
-            .iter()
+        self.shown_drawings()
             .rev()
             .find(|drawing| {
                 self.shape(layout, visible, drawing)
-                    .contains(point, f32::from(drawing.width))
+                    .contains(point, f32::from(drawing.style.width))
             })
             .map(|drawing| (drawing.id, None))
+    }
+
+    /// Whether `drawing` is on screen: drawings are not hidden, and its visibility takes
+    /// the chart's timeframe.
+    pub(crate) fn shows(&self, drawing: &Drawing) -> bool {
+        !self.drawings_hidden && drawing.style.visibility.shows(self.timeframe)
+    }
+
+    /// The drawings on screen, bottom to top.
+    fn shown_drawings(&self) -> impl DoubleEndedIterator<Item = &Drawing> {
+        self.drawings.iter().filter(|drawing| self.shows(drawing))
     }
 
     /// The drawings, the one being placed and the handles of the picked one, on the
@@ -459,19 +500,17 @@ impl Chart {
         background: Color,
     ) {
         frame.with_clip(layout.plot, |frame| {
-            if !self.drawings_hidden {
-                for drawing in &self.drawings {
-                    let shape = self.shape(layout, visible, drawing);
-                    shape.paint(frame, f32::from(drawing.width), drawing.line);
-                    if self.selected == Some(drawing.id) {
-                        shape.paint_handles(frame, background);
-                    }
+            for drawing in self.shown_drawings() {
+                let shape = self.shape(layout, visible, drawing);
+                shape.paint(frame, f32::from(drawing.style.width), drawing.style.line);
+                if self.selected == Some(drawing.id) {
+                    shape.paint_handles(frame, background);
                 }
             }
             if let Some(draft) = &self.draft {
                 let preview = draft.preview();
                 let shape = self.shape(layout, visible, &preview);
-                shape.paint(frame, f32::from(preview.width), preview.line);
+                shape.paint(frame, f32::from(preview.style.width), preview.style.line);
                 shape.paint_handles(frame, background);
             }
         });
@@ -483,11 +522,7 @@ impl Chart {
         layout: &Layout,
         visible: &Visible,
     ) -> Vec<(f32, Anchor, Color)> {
-        if self.drawings_hidden {
-            return Vec::new();
-        }
-        self.drawings
-            .iter()
+        self.shown_drawings()
             .filter(|drawing| {
                 matches!(
                     drawing.kind,
@@ -499,20 +534,18 @@ impl Chart {
             .filter_map(|drawing| {
                 let anchor = *drawing.points.first()?;
                 let y = self.y(layout, visible, anchor.price);
-                (0.0..=layout.plot.height)
-                    .contains(&y)
-                    .then_some((y, anchor, color(drawing.color)))
+                (0.0..=layout.plot.height).contains(&y).then_some((
+                    y,
+                    anchor,
+                    color(drawing.style.color),
+                ))
             })
             .collect()
     }
 
     /// Times the time axis shows for vertical lines, with where and in what color.
     pub(crate) fn line_times(&self, layout: &Layout) -> Vec<(f32, i64, Color)> {
-        if self.drawings_hidden {
-            return Vec::new();
-        }
-        self.drawings
-            .iter()
+        self.shown_drawings()
             .filter(|drawing| {
                 matches!(
                     drawing.kind,
@@ -525,7 +558,7 @@ impl Chart {
                 (0.0..=layout.plot.width).contains(&x).then_some((
                     x,
                     anchor.time,
-                    color(drawing.color),
+                    color(drawing.style.color),
                 ))
             })
             .collect()
@@ -533,7 +566,7 @@ impl Chart {
 
     /// Where a drawing is on screen. A drawing still being placed shows what it has.
     pub(crate) fn shape(&self, layout: &Layout, visible: &Visible, drawing: &Drawing) -> Shape {
-        let mut shape = Shape::new(color(drawing.color));
+        let mut shape = Shape::new(drawing);
         let p: Vec<Point> = drawing
             .points
             .iter()
@@ -572,7 +605,7 @@ impl Chart {
                 for (i, corner) in corners.iter().enumerate() {
                     shape.lines.push((*corner, corners[(i + 1) % 4]));
                 }
-                shape.areas.push((corners, FILL_ALPHA));
+                shape.areas.push((corners, shape.fill));
             }
             (DrawingKind::ParallelChannel, &[a, b, c]) => {
                 // The parallel line goes through the third point.
@@ -587,7 +620,7 @@ impl Chart {
                 shape.guides.push((a + shift * 0.5, b + shift * 0.5));
                 shape
                     .areas
-                    .push((vec![a, b, b + shift, a + shift], FILL_ALPHA * 0.7));
+                    .push((vec![a, b, b + shift, a + shift], shape.fill));
             }
             (DrawingKind::RegressionTrend, &[a, b]) => {
                 self.regression_shape(&mut shape, layout, visible, drawing, a, b)
@@ -598,7 +631,7 @@ impl Chart {
                 let (start, end) = (Point::new(a.x, c.y), Point::new(b.x, c.y));
                 shape.lines.push((a, b));
                 shape.lines.push((start, end));
-                shape.areas.push((vec![a, b, end, start], FILL_ALPHA * 0.7));
+                shape.areas.push((vec![a, b, end, start], shape.fill));
                 shape.handles[2] = end;
             }
             (DrawingKind::DisjointChannel, &[a, b, c]) => {
@@ -606,7 +639,7 @@ impl Chart {
                 let d = c + (b - a);
                 shape.lines.push((a, b));
                 shape.lines.push((c, d));
-                shape.areas.push((vec![a, b, d, c], FILL_ALPHA * 0.7));
+                shape.areas.push((vec![a, b, d, c], shape.fill));
             }
             (
                 DrawingKind::Pitchfork
@@ -630,8 +663,10 @@ impl Chart {
         shape
     }
 
-    /// Fibonacci levels: a line at each, between the two points' times, with its share and
-    /// price, and the bands between them lightly filled.
+    /// Fibonacci levels: a line at each level shown, in its color, between the two points'
+    /// times or on past them; the bands between neighboring levels filled in the color of
+    /// the one farther from 0; labels with the level and its price; and the line of the
+    /// move between the points.
     fn fib_shape(
         &self,
         shape: &mut Shape,
@@ -641,41 +676,94 @@ impl Chart {
         a: Point,
         b: Point,
     ) {
-        let (left, right) = (a.x.min(b.x), a.x.max(b.x));
-        let (from, to) = (drawing.points[0].price, drawing.points[1].price);
-        shape.guides.push((a, b));
-        let mut previous: Option<f32> = None;
-        for (i, level) in drawing.levels.iter().enumerate() {
-            let price = to + (from - to) * level;
-            let y = self.y(layout, visible, price);
+        let style = &drawing.style;
+        let plot = layout.plot;
+        let (mut left, mut right) = (a.x.min(b.x), a.x.max(b.x));
+        if style.extend.left() {
+            left = left.min(0.0);
+        }
+        if style.extend.right() {
+            right = right.max(plot.width);
+        }
+        // 0 is at the second point's price and 1 at the first's, or the other way round.
+        let (mut one, mut zero) = (drawing.points[0].price, drawing.points[1].price);
+        if style.reverse {
+            std::mem::swap(&mut one, &mut zero);
+        }
+        if style.trend.shown {
+            shape.trend = Some((a, b, color(style.trend.color), style.trend.line));
+        }
+        let mut levels: Vec<(f64, f32, Color)> = style
+            .levels
+            .iter()
+            .filter(|level| level.shown)
+            .map(|level| {
+                let price = zero + (one - zero) * level.value;
+                (
+                    level.value,
+                    self.y(layout, visible, price),
+                    color(style.level_color(level)),
+                )
+            })
+            .collect();
+        levels.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let strength = if style.fill {
+            f32::from(style.opacity) / 100.0
+        } else {
+            0.0
+        };
+        for pair in levels.windows(2) {
+            let ((_, near, _), (_, far, tint)) = (pair[0], pair[1]);
+            let band = vec![
+                Point::new(left, near),
+                Point::new(right, near),
+                Point::new(right, far),
+                Point::new(left, far),
+            ];
+            shape.areas.push((band, tint.scale_alpha(strength)));
+        }
+        // Labels are kept on the plot, however far the lines run.
+        let (start, end) = (left.max(0.0), right.min(plot.width));
+        for &(value, y, tint) in &levels {
             shape
-                .lines
-                .push((Point::new(left, y), Point::new(right, y)));
-            if let Some(above) = previous {
-                let alpha = if i % 2 == 0 { 0.06 } else { 0.12 };
-                let band = vec![
-                    Point::new(left, above),
-                    Point::new(right, above),
-                    Point::new(right, y),
-                    Point::new(left, y),
-                ];
-                shape.areas.push((band, alpha));
+                .tinted
+                .push((Point::new(left, y), Point::new(right, y), tint));
+            let price = zero + (one - zero) * value;
+            let Some(text) = self.level_text(style.labels, value, price) else {
+                continue;
+            };
+            let (width, height) = (text_width(&text, LABEL_SIZE) + 8.0, LABEL_SIZE + 6.0);
+            let x = match style.labels.align {
+                LabelAlign::Left => start - width - 2.0,
+                LabelAlign::Center => (start + end - width) / 2.0,
+                LabelAlign::Right => end + 2.0,
+            };
+            let middle = match style.labels.side {
+                LabelSide::Top => y - height / 2.0,
+                LabelSide::Middle => y,
+                LabelSide::Bottom => y + height / 2.0,
+            };
+            let x = x.clamp(0.0, (plot.width - width).max(0.0));
+            shape
+                .labels
+                .push(Label::new(text, x, middle, LABEL_SIZE, tint));
+        }
+    }
+
+    /// The words of a level's label: the level, as a share or a percentage, and its price;
+    /// `None` when the labels show neither.
+    fn level_text(&self, labels: LevelLabels, value: f64, price: f64) -> Option<String> {
+        let level = labels.levels.then(|| {
+            if labels.percent {
+                format!("{}%", trimmed(value * 100.0))
+            } else {
+                trimmed(value)
             }
-            previous = Some(y);
-            let text = format!(
-                "{} ({})",
-                trimmed(*level),
-                scale::price(price, self.decimals)
-            );
-            // Just above its line, inside the retracement, so the edge of the plot does
-            // not cut it off.
-            shape.labels.push(Label::new(
-                text,
-                left,
-                y - LABEL_SIZE * 0.8,
-                LABEL_SIZE,
-                shape.color,
-            ));
+        });
+        let price = labels.prices.then(|| scale::price(price, self.decimals));
+        match (level, price) {
+            (Some(level), Some(price)) => Some(format!("{level} ({price})")),
+            (level, price) => level.or(price),
         }
     }
 
@@ -686,7 +774,9 @@ impl Chart {
         let rising = end.price >= start.price;
         shape.color = if rising { MEASURE_UP } else { MEASURE_DOWN };
         let corners = vec![a, Point::new(b.x, a.y), b, Point::new(a.x, b.y)];
-        shape.areas.push((corners, FILL_ALPHA));
+        shape
+            .areas
+            .push((corners, shape.color.scale_alpha(FILL_ALPHA)));
         let middle = halfway(a, b);
         shape
             .lines
@@ -784,7 +874,7 @@ impl Chart {
         shape.lines.extend([middle, upper, lower]);
         shape
             .areas
-            .push((vec![upper.0, upper.1, lower.1, lower.0], FILL_ALPHA * 0.7));
+            .push((vec![upper.0, upper.1, lower.1, lower.0], shape.fill));
         // Each point's handle is on the line, at the candle the fit starts or ends at.
         shape.handles = bars
             .iter()
@@ -846,7 +936,7 @@ fn pitchfork_shape(shape: &mut Shape, kind: DrawingKind, [a, b, c]: [Point; 3], 
     }
     shape
         .areas
-        .push((vec![left, left_end, right_end, right], FILL_ALPHA * 0.7));
+        .push((vec![left, left_end, right_end, right], shape.fill));
 }
 
 /// A span of time in its two largest units, such as `2d 5h` or `45m`; a second unit
@@ -914,7 +1004,7 @@ mod tests {
         // The side lines run the median's way; a guide shows a moved median's start.
         let heading = |(from, to): (Point, Point)| (to.y - from.y).atan2(to.x - from.x);
         for kind in [DrawingKind::Pitchfork, DrawingKind::SchiffPitchfork] {
-            let mut shape = Shape::new(Color::WHITE);
+            let mut shape = Shape::new(&Drawing::new(0, kind, Vec::new()));
             pitchfork_shape(&mut shape, kind, [a, b, c], 500.0);
             let median = heading(shape.lines[0]);
             assert!((heading(shape.lines[1]) - median).abs() < 1e-5);
@@ -968,7 +1058,7 @@ mod tests {
         assert!((angle(origin, Point::new(10.0, 10.0)) + 45.0).abs() < 1e-4);
         assert!((angle(origin, Point::new(-10.0, 0.0)) - 180.0).abs() < 1e-4);
 
-        let mut shape = Shape::new(Color::WHITE);
+        let mut shape = Shape::new(&Drawing::new(0, DrawingKind::TrendAngle, Vec::new()));
         angle_shape(&mut shape, origin, Point::new(100.0, -100.0));
         assert_eq!(shape.labels[0].text, "45.00°");
         // The guide goes right as far as the line does; the arc runs from it to the line.

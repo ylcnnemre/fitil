@@ -1300,8 +1300,14 @@ impl canvas::Program<ChartMessage> for Chart {
                     last: position,
                     vertical: 0.0,
                 };
+                let now = Instant::now();
+                let double = state.last_press.is_some_and(|(time, place)| {
+                    now.duration_since(time) < DOUBLE_CLICK_TIME && place.distance(position) < 5.0
+                });
+                state.last_press = Some((now, position));
                 // On the price pane, a press places a point with the drawing tool, or
-                // picks a drawing to drag.
+                // picks a drawing to drag; a second press on a drawing opens its
+                // settings.
                 if area == Area::Plot
                     && let Some(v) = self.visible(&layout)
                 {
@@ -1314,13 +1320,18 @@ impl canvas::Program<ChartMessage> for Chart {
                         );
                     }
                     if let Some((id, handle)) = self.drawing_at(&layout, &v, position) {
+                        if double {
+                            state.last_press = None;
+                            state.drag = None;
+                            let edit = ChartMessage::EditDrawing(id);
+                            return Some(Action::publish(edit).and_capture());
+                        }
                         let points = self
                             .drawings
                             .iter()
                             .find(|drawing| drawing.id == id)
                             .map(|drawing| drawing.points.clone())
                             .unwrap_or_default();
-                        state.last_press = None;
                         state.drag = Some(start(Dragged::Drawing {
                             id,
                             handle,
@@ -1331,11 +1342,6 @@ impl canvas::Program<ChartMessage> for Chart {
                         return Some(Action::publish(select).and_capture());
                     }
                 }
-                let now = Instant::now();
-                let double = state.last_press.is_some_and(|(time, place)| {
-                    now.duration_since(time) < DOUBLE_CLICK_TIME && place.distance(position) < 5.0
-                });
-                state.last_press = Some((now, position));
                 if double {
                     state.last_press = None;
                     state.drag = None;
@@ -1764,6 +1770,86 @@ mod tests {
         // Hidden drawings cannot be picked.
         chart.set_drawings_hidden(true);
         assert_eq!(chart.drawing_at(&layout, &visible, near), None);
+    }
+
+    #[test]
+    fn drawings_show_only_on_the_timeframes_they_are_visible_on() {
+        const HOUR: i64 = 3_600_000;
+        let mut chart = chart(50, Vec::new());
+        let layout = chart.layout(size());
+        let visible = chart.visible(&layout).unwrap();
+        let anchor = Anchor {
+            time: 40 * HOUR,
+            price: 11.5,
+        };
+        let mut line = Drawing::new(1, DrawingKind::HorizontalLine, vec![anchor]);
+        line.style
+            .visibility
+            .set_range(fitil_core::TimeUnit::Hour, Some((2, 4)));
+        chart.set_drawings(vec![line]);
+        // The chart is hourly: the line is not there to pick, nor its price on the axis.
+        let point = chart.point_of(&layout, &visible, anchor);
+        assert_eq!(chart.drawing_at(&layout, &visible, point), None);
+        assert!(chart.line_prices(&layout, &visible).is_empty());
+    }
+
+    #[test]
+    fn retracements_draw_the_levels_shown_in_their_colors() {
+        use crate::shapes::color;
+        use fitil_core::{Extend, Rgb};
+        const HOUR: i64 = 3_600_000;
+        let chart = chart(50, Vec::new());
+        let layout = chart.layout(size());
+        let visible = chart.visible(&layout).unwrap();
+        let point = |hour: i64, price: f64| Anchor {
+            time: hour * HOUR,
+            price,
+        };
+        let mut fib = Drawing::new(
+            1,
+            DrawingKind::FibRetracement,
+            vec![point(10, 10.0), point(20, 12.0)],
+        );
+        for level in &mut fib.style.levels {
+            level.shown = [0.0, 0.5, 1.0].contains(&level.value);
+        }
+        let y = |price: f64| chart.y(&layout, &visible, price);
+        let heights = |shape: &crate::shapes::Shape| -> Vec<f32> {
+            shape.tinted.iter().map(|&(from, _, _)| from.y).collect()
+        };
+
+        // 0 is at the second point's price and 1 at the first's, each level in its color,
+        // with the bands between them in the color of the level farther from 0.
+        let shape = chart.shape(&layout, &visible, &fib);
+        assert_eq!(heights(&shape), [y(12.0), y(11.0), y(10.0)]);
+        let green = color(Rgb::hex(0x4CAF50));
+        assert_eq!(shape.tinted[1].2, green);
+        assert_eq!(shape.areas.len(), 2);
+        assert_eq!(shape.areas[0].1, green.scale_alpha(0.15));
+        assert_eq!(shape.labels[1].text, "0.5 (11.00)");
+        assert!(shape.trend.is_some());
+
+        // Reversed, run on to the right, in one color, with percentages and no prices.
+        let style = &mut fib.style;
+        style.reverse = true;
+        style.extend = Extend::Right;
+        style.one_color = true;
+        style.labels.percent = true;
+        style.labels.prices = false;
+        style.trend.shown = false;
+        style.fill = false;
+        let shape = chart.shape(&layout, &visible, &fib);
+        assert_eq!(heights(&shape), [y(10.0), y(11.0), y(12.0)]);
+        assert_eq!(shape.tinted[0].1.x, layout.plot.width);
+        let blue = color(fib.style.color);
+        assert!(shape.tinted.iter().all(|&(_, _, tint)| tint == blue));
+        assert_eq!(shape.labels[1].text, "50%");
+        assert!(shape.trend.is_none());
+        assert!(shape.areas.iter().all(|(_, fill)| fill.a == 0.0));
+
+        // Without levels or prices there are no labels.
+        fib.style.labels.levels = false;
+        assert!(chart.shape(&layout, &visible, &fib).labels.is_empty());
     }
 
     #[test]

@@ -57,11 +57,16 @@ pub fn view<'a>(app: &'a Fitil, dialog: &'a Dialog) -> Element<'a, Message> {
             confirm_delete,
         } => indicators(app, search, template_name, confirm_delete.as_deref()),
         Dialog::Settings { study, drafts } => settings(app, *study, drafts),
+        Dialog::Drawing(window) => crate::drawing_dialog::view(app, window),
     }
 }
 
 /// A dialog's box: its title with a close button, then `body`.
-fn frame<'a>(title: String, width: f32, body: Element<'a, Message>) -> Element<'a, Message> {
+pub(crate) fn frame<'a>(
+    title: String,
+    width: f32,
+    body: Element<'a, Message>,
+) -> Element<'a, Message> {
     let header = row![
         text(title).size(18),
         space().width(Fill),

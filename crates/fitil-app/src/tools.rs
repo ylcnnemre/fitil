@@ -98,6 +98,7 @@ pub fn shortcut(kind: DrawingKind) -> Option<char> {
         DrawingKind::HorizontalRay => Some('J'),
         DrawingKind::VerticalLine => Some('V'),
         DrawingKind::CrossLine => Some('C'),
+        DrawingKind::FibRetracement => Some('F'),
         _ => None,
     }
 }
@@ -138,6 +139,7 @@ mod tests {
         assert_eq!(by_shortcut("t"), Some(DrawingKind::TrendLine));
         assert_eq!(by_shortcut("C"), Some(DrawingKind::CrossLine));
         assert_eq!(by_shortcut("j"), Some(DrawingKind::HorizontalRay));
+        assert_eq!(by_shortcut("f"), Some(DrawingKind::FibRetracement));
         assert_eq!(by_shortcut("x"), None);
         for kind in DrawingKind::ALL {
             if let Some(letter) = shortcut(kind) {

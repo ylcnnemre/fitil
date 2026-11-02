@@ -21,6 +21,27 @@ pub enum TimeUnit {
 }
 
 impl TimeUnit {
+    pub const ALL: [TimeUnit; 6] = [
+        TimeUnit::Second,
+        TimeUnit::Minute,
+        TimeUnit::Hour,
+        TimeUnit::Day,
+        TimeUnit::Week,
+        TimeUnit::Month,
+    ];
+
+    /// Stable identifier, used in saved drawings and translation keys.
+    pub fn id(self) -> &'static str {
+        match self {
+            TimeUnit::Second => "second",
+            TimeUnit::Minute => "minute",
+            TimeUnit::Hour => "hour",
+            TimeUnit::Day => "day",
+            TimeUnit::Week => "week",
+            TimeUnit::Month => "month",
+        }
+    }
+
     fn suffix(self) -> char {
         match self {
             TimeUnit::Second => 's',

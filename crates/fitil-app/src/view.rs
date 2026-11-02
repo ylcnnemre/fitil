@@ -222,7 +222,7 @@ fn divider<'a>() -> Element<'a, Message> {
 }
 
 /// A small box of text shown when hovering something.
-fn hint<'a>(content: String) -> Element<'a, Message> {
+pub(crate) fn hint<'a>(content: String) -> Element<'a, Message> {
     container(text(content).size(12))
         .padding(6)
         .style(container::rounded_box)
@@ -457,7 +457,7 @@ fn tool_menu<'a>(app: &'a Fitil, chart: &'a Chart, group: ToolGroup) -> Element<
 }
 
 /// A row of a menu: plain, lit up under the mouse.
-fn menu_row(theme: &Theme, status: button::Status) -> button::Style {
+pub(crate) fn menu_row(theme: &Theme, status: button::Status) -> button::Style {
     let palette = theme.extended_palette();
     let lit = matches!(status, button::Status::Hovered | button::Status::Pressed);
     button::Style {
@@ -472,7 +472,7 @@ fn menu_row(theme: &Theme, status: button::Status) -> button::Style {
 }
 
 /// The box of a menu, standing out over the chart.
-fn menu_box(theme: &Theme) -> container::Style {
+pub(crate) fn menu_box(theme: &Theme) -> container::Style {
     let palette = theme.extended_palette();
     container::Style {
         background: Some(palette.background.base.color.into()),
@@ -490,7 +490,8 @@ fn menu_box(theme: &Theme) -> container::Style {
     }
 }
 
-/// The look of the picked drawing, with buttons to lock, copy and delete it.
+/// The look of the picked drawing, with buttons for its settings and to lock, copy and
+/// delete it.
 fn drawing_bar<'a>(app: &'a Fitil, drawing: &'a Drawing) -> Element<'a, Message> {
     let t = &app.translations;
     let mut bar = row![text(t.get(&format!("drawing-{}", drawing.kind.id()))).size(13)]
@@ -505,18 +506,19 @@ fn drawing_bar<'a>(app: &'a Fitil, drawing: &'a Drawing) -> Element<'a, Message>
                 name: t.get(&format!("drawing-line-{}", style.id())),
             })
             .collect();
+        let style = &drawing.style;
         let current = lines
             .iter()
-            .find(|choice| choice.value == drawing.line)
+            .find(|choice| choice.value == style.line)
             .cloned();
         bar = bar
             .push(
                 row(PALETTE.into_iter().map(|rgb| {
-                    dialogs::swatch(rgb, rgb == drawing.color, Message::DrawingColor(rgb))
+                    dialogs::swatch(rgb, rgb == style.color, Message::DrawingColor(rgb))
                 }))
                 .spacing(3),
             )
-            .push(pick_list([1u8, 2, 3, 4], Some(drawing.width), Message::DrawingWidth).width(60))
+            .push(pick_list([1u8, 2, 3, 4], Some(style.width), Message::DrawingWidth).width(60))
             .push(
                 pick_list(lines, current, |choice: Choice<LineStyle>| {
                     Message::DrawingLine(choice.value)
@@ -524,33 +526,12 @@ fn drawing_bar<'a>(app: &'a Fitil, drawing: &'a Drawing) -> Element<'a, Message>
                 .width(110),
             );
     }
-    match drawing.kind {
-        DrawingKind::Text => {
-            bar = bar.push(
-                text_input(&t.get("drawing-text-placeholder"), &drawing.text)
-                    .on_input(Message::DrawingText)
-                    .width(220),
-            );
-        }
-        DrawingKind::FibRetracement => {
-            // The levels as typed, until they can be read.
-            let typed = app
-                .levels_text
-                .as_ref()
-                .filter(|(id, _)| *id == drawing.id)
-                .map(|(_, text)| text.clone());
-            let levels = typed.unwrap_or_else(|| {
-                let levels: Vec<String> =
-                    drawing.levels.iter().map(|l| studies::number(*l)).collect();
-                levels.join(" ")
-            });
-            bar = bar.push(text(t.get("drawing-levels")).size(13)).push(
-                text_input("0 0.5 1", &levels)
-                    .on_input(Message::DrawingLevels)
-                    .width(240),
-            );
-        }
-        _ => {}
+    if drawing.kind == DrawingKind::Text {
+        bar = bar.push(
+            text_input(&t.get("drawing-text-placeholder"), &drawing.text)
+                .on_input(Message::DrawingText)
+                .width(220),
+        );
     }
     let action = |glyph: char, key: &str, message: Message| {
         tooltip(
@@ -568,6 +549,11 @@ fn drawing_bar<'a>(app: &'a Fitil, drawing: &'a Drawing) -> Element<'a, Message>
         (icons::UNLOCK, "drawing-lock")
     };
     bar = bar
+        .push(action(
+            icons::SETTINGS,
+            "drawing-settings",
+            Message::OpenDrawingSettings,
+        ))
         .push(action(lock_icon, lock_tip, Message::DrawingLockToggled))
         .push(action(
             icons::COPY,

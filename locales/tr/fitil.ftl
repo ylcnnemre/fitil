@@ -95,6 +95,59 @@ drawing-copy = Kopyala
 drawing-delete = Sil (Delete)
 drawing-levels = Seviyeler
 drawing-text-placeholder = Not yaz…
+
+## Bir çizimin ayarlar penceresi
+
+drawing-settings = Ayarlar
+drawing-tab-style = Stil
+drawing-tab-coordinates = Koordinatlar
+drawing-tab-visibility = Görünürlük
+drawing-line = Çizgi
+drawing-levels-line = Seviye çizgileri
+drawing-words = Metin
+drawing-background = Arka plan
+# Alanların ne kadar koyu boyandığı.
+drawing-opacity = %{ $percent }
+drawing-extend = Uzat
+drawing-extend-none = Yok
+drawing-extend-left = Sola
+drawing-extend-right = Sağa
+drawing-extend-both = İki yana
+drawing-one-color = Tek renk kullan
+drawing-reverse = Karşıt
+drawing-prices = Fiyatlar
+drawing-levels-values = Değerler
+drawing-levels-percent = Yüzdeler
+drawing-labels = Etiketler
+drawing-label-left = Sol
+drawing-label-center = Orta
+drawing-label-right = Sağ
+drawing-label-top = Üst
+drawing-label-middle = Orta
+drawing-label-bottom = Alt
+drawing-measure-colors = Ölçümün renkleri yönünden gelir: yükselişte mavi, düşüşte kırmızı.
+drawing-point = { $number }. nokta
+drawing-price = Fiyat
+drawing-time = Tarih
+drawing-time-placeholder = YYYY-AA-GG SS:DD
+drawing-visibility-second = Saniyeler
+drawing-visibility-minute = Dakikalar
+drawing-visibility-hour = Saatler
+drawing-visibility-day = Günler
+drawing-visibility-week = Haftalar
+drawing-visibility-month = Aylar
+# Bir birimin zaman dilimlerinin alabileceği sayılar, örneğin 1–59 dakika.
+drawing-visibility-limits = { $from }–{ $to }
+drawing-cancel = İptal
+drawing-ok = Tamam
+drawing-template = Şablon
+drawing-template-save-as = Şablon olarak kaydet…
+drawing-template-name = Şablon adı
+drawing-template-save = Kaydet
+drawing-default-save = Varsayılan olarak kaydet
+drawing-default-apply = Varsayılana dön
+drawing-fitil-look = Fitil'in görünümü
+
 chart-open = A
 chart-high = Y
 chart-low = D

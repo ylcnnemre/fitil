@@ -18,7 +18,10 @@ mod templates;
 mod fake;
 
 pub use board::{Board, MarketSnapshot, Match, load_market, search_markets};
-pub use drawings::{load_drawings, save_drawings};
+pub use drawings::{
+    DrawingLooks, DrawingTemplate, delete_drawing_template, load_drawing_looks, load_drawings,
+    save_drawing_default, save_drawing_template, save_drawings,
+};
 pub use loader::{Loaded, SharedStore, load_older, open_series, save_candle};
 pub use series::{LiveUpdate, Series};
 pub use studies::{Studies, Study, StudyId, is_available};

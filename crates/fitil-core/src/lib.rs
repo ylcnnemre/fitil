@@ -9,6 +9,9 @@ mod market;
 mod timeframe;
 
 pub use candle::{Candle, aggregate, aggregate_whole};
-pub use drawing::{Anchor, Drawing, DrawingKind, FIB_LEVELS, LineStyle, Rgb};
+pub use drawing::{
+    Anchor, Drawing, DrawingKind, DrawingStyle, Extend, FIB_LEVELS, LabelAlign, LabelSide, Level,
+    LevelLabels, LineStyle, Rgb, TrendLook, Visibility,
+};
 pub use market::{ExchangeId, Market, MarketKind, SeriesKey, Symbol, Ticker, decimals_from_step};
 pub use timeframe::{ParseTimeframeError, TimeUnit, Timeframe};

@@ -94,10 +94,13 @@ Alış/Satış Hacmi ve CVD için ek veri indirmek gerekmez. Binance her mumla b
 - **Çizgiler:** Trend çizgisi, ışın, bilgi çizgisi, uzatılmış çizgi, trend açısı, yatay çizgi, yatay ışın, dikey çizgi, kesişim çizgisi.
 - **Kanallar:** Paralel kanal, regresyon trendi, düz tepe/dip, ayrık kanal.
 - **Dirgenler:** Dirgen, Schiff dirgeni, modifiye Schiff dirgeni, iç dirgen.
+- **Fibonacci:** Fib düzeltmesi, trend temelli fib uzatması, Fib kanalı, Fib zaman bölgesi, Fib hız direnç fanı, trend temelli fib zamanı, Fib çemberleri, Fib sarmalı, Fib hız direnç yayları, Fib takozu, Andrews çatalı (TradingView'daki İngilizce adıyla Pitchfan).
+- **Gann:** Gann kutusu, sabit Gann karesi, Gann karesi, Gann fanı.
 - **Şekiller:** Dikdörtgen.
-- **Fibonacci:** Fibonacci düzeltme. Seviyeleri düzenlenebilir.
 - **Diğer:** Metin notu, ölçüm aracı (fiyat farkı, yüzde değişim, mum sayısı ve süre).
+- **Sıra:** Fib düzeltmesi dışındaki Fibonacci ve Gann araçları, proje sahibinin gönderdiği TradingView menüsüne göre 2 Kasım 2026'da kararlaştırıldı. Önce düzenleme penceresi yapılır, proje sahibi dener, sonra bu araçlar eklenir. Tanımları eklenirken TradingView'ın yardım sayfalarından alınır.
 - **Araçların tanımı** (TradingView'daki karşılıklarına göre):
+  - **Fib düzeltmesi:** İki nokta arasındaki fiyat hareketinin oranlarında yatay seviyeler. 0 ikinci noktanın, 1 birinci noktanın fiyatıdır; "karşıt" seçilince tersi. Seviyeler TradingView'daki gibi 0, 0.236, 0.382, 0.5, 0.618, 0.786, 1, 1.618, 2.618, 3.618 ve 4.236'dır, her biri kendi renginde; 24 seviyeye kadar eklenebilir.
   - **Bilgi çizgisi:** Trend çizgisi ve altında bir kutu: fiyat farkı, yüzde değişim, mum sayısı, süre ve açı.
   - **Trend açısı:** Trend çizgisi, başladığı noktadan çıkan yatay bir kılavuz çizgi ve aradaki açı (derece). Açı ekrandaki eğime göre hesaplanır, bu yüzden yakınlaştırınca değişir.
   - **Kesişim çizgisi:** Tek tıkla, bir noktadan geçen yatay ve dikey çizgi. Fiyatı fiyat ekseninde, tarihi zaman ekseninde görünür. Dikey çizginin tarihi de zaman ekseninde görünür.
@@ -115,15 +118,35 @@ Alış/Satış Hacmi ve CVD için ek veri indirmek gerekmez. Binance her mumla b
   - Kilitleme ve gizleme.
   - Geri al / yinele (Ctrl+Z / Ctrl+Y).
 - **Stil:** Renk, kalınlık, çizgi tipi (düz, kesikli, noktalı).
+- **Düzenleme penceresi** (TradingView'daki gibi; proje sahibinin isteği, 2 Kasım 2026):
+  - Çizime çift tıklayınca ya da seçili çizimin satırındaki ayarlar düğmesiyle açılır.
+  - **Stil sekmesi:** Renk, kalınlık ve çizgi tipi. Alanı boyalı şekillerde arka plan (aç/kapa) ve saydamlığı, notta metin. Fibonacci araçlarında ayrıca:
+    - seviye tablosu: 24 satır, her birinde aç/kapa, değer ve renk;
+    - tüm seviyeleri tek renkte gösterme;
+    - trend çizgisi (aç/kapa, renk, çizgi tipi) ve seviye çizgilerinin kalınlığı ve tipi;
+    - seviye çizgilerini uzatma: yok, sola, sağa, iki yana;
+    - arka plan ve saydamlığı, karşıt (yönü ters çevirme);
+    - etiketlerde fiyatlar ve seviyeler (değer ya da yüzde olarak);
+    - etiketlerin yeri: sol, orta, sağ ve çizginin üstü, ortası, altı.
+  - **Koordinatlar sekmesi:** Her noktanın fiyatı ve tarihi/saati elle yazılır.
+  - **Görünürlük sekmesi:** Saniye, dakika, saat, gün, hafta ve ay için ayrı ayrı aç/kapa ve aralık. Örneğin bir çizgi sadece 1–4 saatlik grafiklerde görünür. Yeni çizimler her zaman diliminde görünür.
+  - Değişiklikler grafikte hemen görünür. Tamam onaylar ve tek bir geri alma adımı olur. İptal, Esc ya da pencerenin dışına tıklamak hepsini geri alır.
+  - **Şablon menüsü** (araç türüne göre, `user.sqlite`'ta):
+    - Şablon olarak kaydet: görünüm bir isimle kaydedilir. Kayıtlı şablonlar menüde listelenir, seçilince uygulanır, silinebilir.
+    - Varsayılan olarak kaydet: bu türdeki yeni çizimler bu görünümle başlar.
+    - Varsayılana dön: çizim kaydedilen varsayılana döner, varsayılan kaydedilmemişse Fitil'in görünümüne.
+    - Fitil'in görünümü: çizim Fitil'in kendi görünümüne döner.
+    - Şablonlar ve varsayılanlar çizimin görünümünü taşır: noktalarını, metnini ve kilidini taşımaz.
 - **Yerleşim:**
   - Araçlar TradingView'daki gibi grafiğin solunda dikey bir çubuktadır. Mıknatıs, tümünü kilitle, gizle ve sil düğmeleri de orada.
   - Çizgiler, kanallar ve dirgenler tek bir düğmede toplanır. Düğmeye tıklayınca sağında bir menü açılır, araç oradan seçilir. Menüde bölüm başlıkları (Çizgiler, Kanallar, Dirgenler), her aracın simgesi, adı ve varsa kısayolu bulunur.
   - Düğme, bu gruptan en son seçilen aracın simgesini gösterir. Menü dışarı tıklayınca, Esc'ye basınca ya da düğmeye yeniden tıklayınca kapanır.
-  - Dikdörtgen, Fibonacci, metin notu ve ölçüm şimdilik ayrı düğmelerdir. Bunlar da ileride kendi gruplarına alınacak.
-  - Seçili çizimin rengi, kalınlığı, çizgi tipi, metni ya da Fibonacci seviyeleri grafiğin üstündeki satırdan değiştirilir. Geri al / yinele düğmeleri üst araç çubuğundadır.
-- **Kısayollar** (TradingView'daki gibi): Alt+T trend çizgisi, Alt+H yatay çizgi, Alt+J yatay ışın, Alt+V dikey çizgi, Alt+C kesişim çizgisi.
+  - Fibonacci ve Gann araçları da bir grup düğmesindedir. Menüsünde Fibonacci ve Gann bölümleri vardır.
+  - Dikdörtgen, metin notu ve ölçüm şimdilik ayrı düğmelerdir. Bunlar da ileride kendi gruplarına alınacak.
+  - Seçili çizimin rengi, kalınlığı, çizgi tipi ve metni grafiğin üstündeki satırdan hızlıca değiştirilir. Satırda ayarlar, kilitle, kopyala ve sil düğmeleri de vardır. Fibonacci seviyeleri düzenleme penceresinden değiştirilir. Geri al / yinele düğmeleri üst araç çubuğundadır.
+- **Kısayollar** (TradingView'daki gibi): Alt+T trend çizgisi, Alt+H yatay çizgi, Alt+J yatay ışın, Alt+V dikey çizgi, Alt+C kesişim çizgisi, Alt+F Fib düzeltmesi.
 - **Kayıt:**
-  - Çizimler sembole bağlıdır ve tüm zaman dilimlerinde görünür. Aynı adlı spot ve vadeli pariteler ayrı semboldür, çizimleri de ayrıdır (TradingView gibi).
+  - Çizimler sembole bağlıdır. Görünürlük sekmesinde sınırlanmadıkça tüm zaman dilimlerinde görünür. Aynı adlı spot ve vadeli pariteler ayrı semboldür, çizimleri de ayrıdır (TradingView gibi).
   - Otomatik kaydedilir, uygulama kapansa da kaybolmaz.
 
 ### 4.5 Çalışma alanı

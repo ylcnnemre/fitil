@@ -26,6 +26,8 @@ pub const UNDO: char = '\u{e2a1}'; // undo-2
 pub const REDO: char = '\u{e2a0}'; // redo-2
 pub const COPY: char = '\u{e09e}'; // copy
 pub const SEARCH: char = '\u{e151}'; // search
+pub const SETTINGS: char = '\u{e154}'; // settings
+pub const CHEVRON_DOWN: char = '\u{e06d}'; // chevron-down
 pub const INDICATORS: char = '\u{e038}'; // activity
 
 /// How tall a line of text is, as a share of its size: a font icon's height.

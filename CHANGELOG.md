@@ -74,7 +74,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
     standard deviations away, and Pearson's R), flat top/bottom and disjoint channel.
   - Pitchforks: Andrews', Schiff, modified Schiff and inside.
   - Alt+T, Alt+H, Alt+J, Alt+V and Alt+C pick the trend line, horizontal line, horizontal
-    ray, vertical line and cross line.
+    ray, vertical line and cross line; Alt+F the Fibonacci retracement.
+- A settings window for every drawing, as in TradingView, opened by double-clicking the
+  drawing or with the settings button of its row. Changes show at once; OK keeps them as
+  one step to undo, Cancel or Esc drops them.
+  - Style: color, width and line style, the background of shapes with an area and how
+    strong it is, a note's text.
+  - Fibonacci retracements show TradingView's eleven levels, each in its own color, with up
+    to 24 levels to turn on, change and color; one color for all; the line of the move;
+    lines run on to the left or right; the background; reverse; labels with the levels
+    as values or percentages and their prices, left, centered or right of the lines and
+    above, on or below them.
+  - Coordinates: each point's price and local date and time, typed in.
+  - Visibility: the timeframes a drawing shows on, by unit from seconds to months, each
+    within a range of counts.
+  - Templates for each kind of drawing: looks saved under a name and applied, the look
+    new drawings start with, and going back to it or to Fitil's own look.
 
 ### Changed
 
@@ -91,6 +106,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The window is laid out like TradingView: the chart fills it, under a toolbar with the
   symbol, favorite timeframes as buttons, the chart type, scales, indicators and volume.
   The watchlist on the left is replaced by the symbol search window.
+- Fibonacci levels are set in the drawing's settings instead of the row above the chart.
+- Drawings are saved in a second version of their form. Drawings saved before are read
+  and keep their look.
 - Candles, volume bars, OHLC bars, indicator columns and dots are drawn one by one, which
   the renderer prepares several times faster than one shape holding them all. With a few
   hundred candles on screen a frame of panning or zooming takes about a sixth of the time,

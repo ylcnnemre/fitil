@@ -95,6 +95,59 @@ drawing-copy = Copy
 drawing-delete = Delete (Del)
 drawing-levels = Levels
 drawing-text-placeholder = Write a note…
+
+## A drawing's settings window
+
+drawing-settings = Settings
+drawing-tab-style = Style
+drawing-tab-coordinates = Coordinates
+drawing-tab-visibility = Visibility
+drawing-line = Line
+drawing-levels-line = Level lines
+drawing-words = Text
+drawing-background = Background
+# How strongly areas are filled.
+drawing-opacity = { $percent }%
+drawing-extend = Extend
+drawing-extend-none = None
+drawing-extend-left = Left
+drawing-extend-right = Right
+drawing-extend-both = Both ways
+drawing-one-color = Use one color
+drawing-reverse = Reverse
+drawing-prices = Prices
+drawing-levels-values = Values
+drawing-levels-percent = Percentages
+drawing-labels = Labels
+drawing-label-left = Left
+drawing-label-center = Center
+drawing-label-right = Right
+drawing-label-top = Top
+drawing-label-middle = Middle
+drawing-label-bottom = Bottom
+drawing-measure-colors = A measure takes its colors from its direction: blue going up, red going down.
+drawing-point = Point { $number }
+drawing-price = Price
+drawing-time = Date
+drawing-time-placeholder = YYYY-MM-DD HH:MM
+drawing-visibility-second = Seconds
+drawing-visibility-minute = Minutes
+drawing-visibility-hour = Hours
+drawing-visibility-day = Days
+drawing-visibility-week = Weeks
+drawing-visibility-month = Months
+# The counts a unit's timeframes can have, such as 1–59 minutes.
+drawing-visibility-limits = { $from }–{ $to }
+drawing-cancel = Cancel
+drawing-ok = OK
+drawing-template = Template
+drawing-template-save-as = Save as template…
+drawing-template-name = Template name
+drawing-template-save = Save
+drawing-default-save = Save as default
+drawing-default-apply = Back to default
+drawing-fitil-look = Fitil's look
+
 chart-open = O
 chart-high = H
 chart-low = L

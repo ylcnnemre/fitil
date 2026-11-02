@@ -437,3 +437,44 @@ Geçici satırlar silindi. Önceki test penceresine (pid 12000) dokunulmadı.
 **Testler:** 166 test ve 3 canlı test. fmt ve clippy temiz. Commit `ec71f3b`, GitHub'da derleme üç sistemde geçti.
 
 **Proje sahibinin denemesi:** Release sürümde grafiği kaydırdı ve "Evet, akıcı" dedi.
+
+### Çizimlerin düzenleme penceresi (karar 20; kodlandı, proje sahibinin denemesi bekleniyor)
+
+**Nasıl başladı:** Proje sahibi TradingView'ın Fibonacci menüsünün ve Fib düzeltmesi ayar penceresinin ekran görüntülerini gönderdi: "Tamam Fibonacci araçlarına geçelim ama düzenlemek için de şöyle bir modal açılsın."
+
+**Konuşulanlar:** Claude planı anlattı ve dört soru sordu. Proje sahibi hepsinde önerileni seçti:
+- Gann araçları da bu adımda (fotoğraftaki menünün tamamı: 11 Fibonacci, 4 Gann).
+- Görünürlük sekmesi şimdi.
+- Şablon menüsü TradingView gibi: isimle kaydetme, varsayılan olarak kaydetme, varsayılana dönme.
+- Sıra: önce pencere, proje sahibi dener, sonra yeni araçlar.
+
+Menüdeki yıldızlar (favori araçlar çubuğu) plana alınmadı, istenirse sonra.
+
+**Yapılanlar:**
+1. **`docs/TASARIM.md` §4.4:** Fibonacci ve Gann listeleri, düzenleme penceresi, şablonlar, Alt+F, görünürlük.
+2. **`fitil-core`:**
+   - `DrawingStyle`: çizimin görünümü (renk, kalınlık, çizgi, arka plan ve gücü, seviyeler, tek renk, trend çizgisi, uzatma, karşıt, etiketler, görünürlük). `Drawing` artık `style` taşıyor; şablonlar da birer `DrawingStyle`.
+   - `Level` (değer, renk, açık/kapalı), `FIB_LEVELS` 24 seviye: TradingView'ın gösterdiği 0, 0.236, 0.382, 0.5, 0.618, 0.786, 1, 1.618, 2.618, 3.618, 4.236 açık, diğerleri (0.65, 1.272 … 4.764) kapalı.
+   - `Extend`, `LabelAlign`, `LabelSide`, `LevelLabels`, `TrendLook`, `Visibility` (birim başına aralık; aralığın üst ucu sınırdaysa daha uzun zaman dilimleri de, ör. 90m).
+   - `TimeUnit::ALL` ve `TimeUnit::id`.
+3. **`fitil-store`:** `user.sqlite` göç 3: `drawing_templates` (tür, ad, içerik) ve `drawing_defaults` (tür, içerik).
+4. **`fitil-market`:** çizim kayıt biçimi 2. sürüm. Sadece türün kullandığı alanlar yazılıyor. 1. sürümün düz sayı seviyeleri okununca gösteriliyor, tek renk açılıyor ve Fitil'in diğer seviyeleri kapalı olarak ekleniyor. `load_drawing_looks`, `save_drawing_template`, `delete_drawing_template`, `save_drawing_default`.
+5. **`fitil-chart`:**
+   - Fib düzeltmesi: her seviye kendi renginde, bantlar 0'dan uzak olan seviyenin renginde, uzatma, karşıt, etiketler (seviye/yüzde, fiyat; sol/orta/sağ, üst/orta/alt; çizim alanında tutulur), trend çizgisi kendi renginde ve tipinde.
+   - Arka planı olan şekillerde dolgu aç/kapa ve güç. Kapalı dolgu da tıklayınca çizimi seçer.
+   - Görünürlük: grafiğin zaman diliminde görünmeyen çizim çizilmez, seçilmez, eksende fiyatı/tarihi çıkmaz.
+   - Yeni çizimler kayıtlı varsayılan görünümle başlar (`set_drawing_defaults`).
+   - Düzenleme oturumu: `begin_edit`, `edit_open`, `finish_edit(keep)`. Değişiklikler hemen görünür, kaydedilmez; Tamam tek geri alma adımı ve kayıt, İptal eski hâline döner.
+   - Çizime çift tıklama `ChartMessage::EditDrawing`.
+6. **`fitil-app`:**
+   - `drawing_dialog.rs`: pencere (sekmeler, renk paletleri, seviye tablosu, koordinatlar, görünürlük, şablon menüsü). Yazılan sayılar okunana kadar yazıldığı gibi kalır. Tarihler yerel saatle `YYYY-AA-GG SS:DD`.
+   - Seçili çizimin satırında ayarlar düğmesi; Fib seviye kutusu satırdan kalktı.
+   - Esc önce açık paleti ya da şablon menüsünü, sonra pencereyi kapatır (iptal). Pencere açıkken araç kısayolları grafiğe gitmez.
+   - `flyout.rs` menüsü artık odaklama işlemlerini de iletir (şablon adı kutusu açılınca odaklanır).
+   - Alt+F Fib düzeltmesi. Yeni metinler iki dilde.
+
+**Ekranda doğrulananlar** (test penceresi, önbellek kopyası `perf-data`, geçici `TEMP-VERIFY` satırlarıyla): Fib'in Stil sekmesi, renk paleti, şablon menüsü (kayıtlı bir şablonla), Koordinatlar, Görünürlük, dikdörtgenin Stil sekmesi; grafikte yeni Fib (renkli seviyeler, soldaki etiketler, bantlar) ve karşıt + sağa uzatılmış + yüzdeli hâli. Geçici satırlar silindi. Not: test pencerelerinden ikisinde proje sahibi pencereye tıkladığı için görüntüler bozuldu, yeniden alındı; birinde borsaya ulaşılamadı.
+
+**Testler:** 186 test (`fitil-chart` 38, `fitil-app` 37, `fitil-indicators` 30, `fitil-market` 28, `fitil-core` 19, `fitil-store` 16, `fitil-exchange` 9, `fitil-binance` 9) ve 3 canlı test. fmt ve clippy temiz.
+
+**Kaynak:** TradingView'ın Fib düzeltmesi 24 seviyeye kadar alabiliyor (TradingView wiki); varsayılanda 0'dan 4.236'ya 11 seviye açık (topluluk betiğinin açıklaması). Varsayılan renkler TradingView'ın paletinden seçildi.

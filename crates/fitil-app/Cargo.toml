@@ -12,6 +12,7 @@ name = "fitil"
 path = "src/main.rs"
 
 [dependencies]
+chrono.workspace = true
 directories.workspace = true
 fitil-binance.workspace = true
 fitil-chart.workspace = true

@@ -28,6 +28,20 @@ const MIGRATIONS: &[&str] = &[
         PRIMARY KEY (exchange, market, symbol)
     ) WITHOUT ROWID;
     ",
+    // 3: named looks for each kind of drawing, and the look each kind's new drawings
+    // start with. Bodies are written by the application layer.
+    "
+    CREATE TABLE drawing_templates (
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        body TEXT NOT NULL,
+        PRIMARY KEY (kind, name)
+    ) WITHOUT ROWID;
+    CREATE TABLE drawing_defaults (
+        kind TEXT PRIMARY KEY,
+        body TEXT NOT NULL
+    ) WITHOUT ROWID;
+    ",
 ];
 
 /// A saved indicator template, as stored.
@@ -35,6 +49,16 @@ const MIGRATIONS: &[&str] = &[
 pub struct StoredTemplate {
     pub name: String,
     /// The template's content, as written by the application layer.
+    pub body: String,
+}
+
+/// A saved look for one kind of drawing, as stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredDrawingTemplate {
+    /// The drawing kind's identifier.
+    pub kind: String,
+    pub name: String,
+    /// The look, as written by the application layer.
     pub body: String,
 }
 
@@ -84,6 +108,64 @@ impl UserData {
             "DELETE FROM indicator_templates WHERE name = ?1",
             params![name],
         )?;
+        Ok(())
+    }
+
+    /// Every saved drawing template, by kind and then by name.
+    pub fn drawing_templates(&self) -> Result<Vec<StoredDrawingTemplate>> {
+        let mut query = self.conn.prepare_cached(
+            "SELECT kind, name, body FROM drawing_templates
+             ORDER BY kind, name COLLATE NOCASE, name",
+        )?;
+        let rows = query.query_map([], |row| {
+            Ok(StoredDrawingTemplate {
+                kind: row.get(0)?,
+                name: row.get(1)?,
+                body: row.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Saves a drawing template, replacing any of the same kind with the same name.
+    pub fn save_drawing_template(&mut self, template: &StoredDrawingTemplate) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO drawing_templates (kind, name, body) VALUES (?1, ?2, ?3)",
+            params![template.kind, template.name, template.body],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_drawing_template(&mut self, kind: &str, name: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM drawing_templates WHERE kind = ?1 AND name = ?2",
+            params![kind, name],
+        )?;
+        Ok(())
+    }
+
+    /// The looks new drawings start with, as `(kind, body)` pairs, for the kinds that have
+    /// one saved.
+    pub fn drawing_defaults(&self) -> Result<Vec<(String, String)>> {
+        let mut query = self
+            .conn
+            .prepare_cached("SELECT kind, body FROM drawing_defaults ORDER BY kind")?;
+        let rows = query.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Saves the look new drawings of `kind` start with; `None` goes back to Fitil's.
+    pub fn save_drawing_default(&mut self, kind: &str, body: Option<&str>) -> Result<()> {
+        match body {
+            Some(body) => self.conn.execute(
+                "INSERT OR REPLACE INTO drawing_defaults (kind, body) VALUES (?1, ?2)",
+                params![kind, body],
+            )?,
+            None => self.conn.execute(
+                "DELETE FROM drawing_defaults WHERE kind = ?1",
+                params![kind],
+            )?,
+        };
         Ok(())
     }
 
@@ -211,5 +293,59 @@ mod tests {
 
         user.save_drawings(spot, "BTCUSDT", None).unwrap();
         assert_eq!(user.drawings(spot, "BTCUSDT").unwrap(), None);
+    }
+
+    #[test]
+    fn drawing_templates_are_kept_per_kind() {
+        let template = |kind: &str, name: &str, body: &str| StoredDrawingTemplate {
+            kind: kind.into(),
+            name: name.into(),
+            body: body.into(),
+        };
+        let mut user = UserData::open_in_memory().unwrap();
+        assert!(user.drawing_templates().unwrap().is_empty());
+
+        user.save_drawing_template(&template("ray", "Kalın", "1"))
+            .unwrap();
+        user.save_drawing_template(&template("fib-retracement", "Altın", "2"))
+            .unwrap();
+        user.save_drawing_template(&template("fib-retracement", "Altın", "3"))
+            .unwrap();
+        user.save_drawing_template(&template("fib-retracement", "kısa", "4"))
+            .unwrap();
+        assert_eq!(
+            user.drawing_templates().unwrap(),
+            [
+                template("fib-retracement", "Altın", "3"),
+                template("fib-retracement", "kısa", "4"),
+                template("ray", "Kalın", "1"),
+            ]
+        );
+
+        user.delete_drawing_template("fib-retracement", "Altın")
+            .unwrap();
+        user.delete_drawing_template("ray", "never saved").unwrap();
+        assert_eq!(user.drawing_templates().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn each_kind_has_at_most_one_default_look() {
+        let mut user = UserData::open_in_memory().unwrap();
+        user.save_drawing_default("ray", Some("1")).unwrap();
+        user.save_drawing_default("ray", Some("2")).unwrap();
+        user.save_drawing_default("text", Some("3")).unwrap();
+        assert_eq!(
+            user.drawing_defaults().unwrap(),
+            [
+                ("ray".to_owned(), "2".to_owned()),
+                ("text".into(), "3".into())
+            ]
+        );
+
+        user.save_drawing_default("ray", None).unwrap();
+        assert_eq!(
+            user.drawing_defaults().unwrap(),
+            [("text".to_owned(), "3".to_owned())]
+        );
     }
 }

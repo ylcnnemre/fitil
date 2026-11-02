@@ -260,6 +260,18 @@ impl<Message: Clone> overlay::Overlay<Message, Theme, Renderer> for Menu<'_, '_,
         }
     }
 
+    /// Lets operations reach the menu, so that a text box in it can be focused.
+    fn operate(
+        &mut self,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn iced::advanced::widget::Operation,
+    ) {
+        self.menu
+            .as_widget_mut()
+            .operate(self.tree, layout, renderer, operation);
+    }
+
     fn mouse_interaction(
         &self,
         layout: Layout<'_>,

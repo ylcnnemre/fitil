@@ -1,7 +1,7 @@
 use std::cell::Cell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
-use fitil_core::{Anchor, Candle, Drawing, DrawingKind, Timeframe};
+use fitil_core::{Anchor, Candle, Drawing, DrawingKind, DrawingStyle, Timeframe};
 use iced::widget::canvas;
 use iced::{Element, Fill};
 
@@ -111,6 +111,9 @@ pub enum ChartMessage {
     MoveDrawing { id: u64, points: Vec<Anchor> },
     /// The end of a drag of a drawing.
     FinishMove,
+    /// A double click on a drawing, to open its settings. The chart picks it; the
+    /// application opens the settings.
+    EditDrawing(u64),
     /// Drops the drawing being placed, or else the tool, or else the selection.
     Cancel,
 }
@@ -161,6 +164,10 @@ pub struct Chart {
     pub(crate) moving: bool,
     /// The drawings changed since they were last handed out to be saved.
     pub(crate) unsaved: bool,
+    /// The drawing whose settings are open, as it was when they opened.
+    pub(crate) editing: Option<Drawing>,
+    /// The looks new drawings start with, by kind; Fitil's for the kinds missing.
+    pub(crate) defaults: HashMap<DrawingKind, DrawingStyle>,
     /// Plot width, shown price range and height of all panes as of the last draw.
     pub(crate) plot_width: Cell<f64>,
     pub(crate) shown_range: Cell<Option<(f64, f64)>>,
@@ -206,6 +213,8 @@ impl Chart {
             redo: Vec::new(),
             moving: false,
             unsaved: false,
+            editing: None,
+            defaults: HashMap::new(),
             plot_width: Cell::new(800.0),
             shown_range: Cell::new(None),
             panes_height: Cell::new(600.0),
@@ -407,6 +416,7 @@ impl Chart {
                 }
                 return;
             }
+            ChartMessage::EditDrawing(id) => return self.selected = Some(id),
             ChartMessage::Cancel => return self.cancel(),
         }
         self.clamp();

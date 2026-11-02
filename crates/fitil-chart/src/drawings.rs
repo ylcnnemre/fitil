@@ -1,7 +1,9 @@
 //! Editing drawings: placing them point by point, picking, moving and changing them,
 //! with undo and redo. Where drawings go on screen is in `shapes`.
 
-use fitil_core::{Anchor, Drawing, DrawingKind};
+use std::collections::HashMap;
+
+use fitil_core::{Anchor, Drawing, DrawingKind, DrawingStyle};
 
 use crate::Chart;
 
@@ -20,6 +22,8 @@ pub(crate) struct Draft {
     pub points: Vec<Anchor>,
     /// Where the next point would go: under the cursor.
     pub next: Option<Anchor>,
+    /// The look the drawing will have.
+    pub style: DrawingStyle,
 }
 
 impl Draft {
@@ -27,7 +31,10 @@ impl Draft {
     pub fn preview(&self) -> Drawing {
         let mut points = self.points.clone();
         points.extend(self.next);
-        Drawing::new(0, self.kind, points)
+        Drawing {
+            style: self.style.clone(),
+            ..Drawing::new(0, self.kind, points)
+        }
     }
 }
 
@@ -37,10 +44,77 @@ impl Chart {
         self.drawings = drawings;
         self.selected = None;
         self.draft = None;
+        self.editing = None;
         self.undo.clear();
         self.redo.clear();
         self.moving = false;
         self.unsaved = false;
+    }
+
+    /// The looks new drawings start with, for the kinds that have one saved; the others
+    /// start with Fitil's.
+    pub fn set_drawing_defaults(&mut self, defaults: HashMap<DrawingKind, DrawingStyle>) {
+        self.defaults = defaults;
+    }
+
+    /// The look a new drawing of `kind` starts with.
+    pub fn default_style(&self, kind: DrawingKind) -> DrawingStyle {
+        self.defaults
+            .get(&kind)
+            .cloned()
+            .unwrap_or_else(|| DrawingStyle::of(kind))
+    }
+
+    /// Opens a drawing's settings, picking it. Its changes until [`Chart::finish_edit`]
+    /// show at once, and are then kept or dropped together.
+    pub fn begin_edit(&mut self, id: u64) -> bool {
+        let Some(drawing) = self.drawings.iter().find(|drawing| drawing.id == id) else {
+            return false;
+        };
+        self.editing = Some(drawing.clone());
+        self.selected = Some(id);
+        self.draft = None;
+        self.tool = None;
+        true
+    }
+
+    /// The drawing whose settings are open, as changed so far.
+    pub fn edited_drawing(&self) -> Option<&Drawing> {
+        let id = self.editing.as_ref()?.id;
+        self.drawings.iter().find(|drawing| drawing.id == id)
+    }
+
+    /// Changes the drawing whose settings are open.
+    pub fn edit_open(&mut self, change: impl FnOnce(&mut Drawing)) {
+        let Some(id) = self.editing.as_ref().map(|drawing| drawing.id) else {
+            return;
+        };
+        if let Some(drawing) = self.drawings.iter_mut().find(|drawing| drawing.id == id) {
+            change(drawing);
+        }
+    }
+
+    /// Closes the drawing's settings: its changes become one step to undo, or the drawing
+    /// goes back to how it was when they opened.
+    pub fn finish_edit(&mut self, keep: bool) {
+        let Some(before) = self.editing.take() else {
+            return;
+        };
+        let Some(index) = self
+            .drawings
+            .iter()
+            .position(|drawing| drawing.id == before.id)
+        else {
+            return;
+        };
+        if !keep {
+            self.drawings[index] = before;
+        } else if self.drawings[index] != before {
+            let mut previous = self.drawings.clone();
+            previous[index] = before;
+            self.push_undo(previous);
+            self.unsaved = true;
+        }
     }
 
     pub fn drawings(&self) -> &[Drawing] {
@@ -192,20 +266,30 @@ impl Chart {
         let Some(kind) = self.tool else {
             return;
         };
-        let draft = self.draft.get_or_insert_with(|| Draft {
-            kind,
-            points: Vec::new(),
-            next: None,
-        });
+        if self.draft.is_none() {
+            self.draft = Some(Draft {
+                kind,
+                points: Vec::new(),
+                next: None,
+                style: self.default_style(kind),
+            });
+        }
+        let Some(draft) = &mut self.draft else {
+            return;
+        };
         draft.points.push(anchor);
         draft.next = Some(anchor);
         if draft.points.len() < kind.points() {
             return;
         }
         let points = std::mem::take(&mut draft.points);
+        let style = draft.style.clone();
         self.draft = None;
         let id = self.next_drawing_id();
-        let mut drawing = Drawing::new(id, kind, points);
+        let mut drawing = Drawing {
+            style,
+            ..Drawing::new(id, kind, points)
+        };
         if kind == DrawingKind::Text {
             drawing.text = self.labels.note.clone();
         }
@@ -244,7 +328,12 @@ impl Chart {
     /// Remembers the drawings as they are, so that the change about to be made can be
     /// undone.
     fn record(&mut self) {
-        self.undo.push(self.drawings.clone());
+        self.push_undo(self.drawings.clone());
+    }
+
+    /// Keeps `drawings` as the state to go back to on undo.
+    fn push_undo(&mut self, drawings: Vec<Drawing>) {
+        self.undo.push(drawings);
         if self.undo.len() > HISTORY {
             self.undo.remove(0);
         }
@@ -382,6 +471,66 @@ mod tests {
     }
 
     #[test]
+    fn settings_changes_are_kept_or_dropped_together() {
+        use fitil_core::{LineStyle, Rgb};
+        let fitil = DrawingStyle::of(DrawingKind::TrendLine);
+        let mut chart = chart(&[0, 1, 2, 3]);
+        chart.set_drawings(vec![Drawing::new(
+            1,
+            DrawingKind::TrendLine,
+            vec![at(0.0, 10.0), at(2.0, 11.0)],
+        )]);
+        assert!(!chart.begin_edit(9));
+
+        // Changes show at once but are not saved until kept; cancelling drops them all.
+        assert!(chart.begin_edit(1));
+        chart.edit_open(|drawing| drawing.style.width = 4);
+        chart.edit_open(|drawing| drawing.style.color = Rgb::hex(0xF23645));
+        assert_eq!(chart.edited_drawing().unwrap().style.width, 4);
+        assert_eq!(chart.take_changed_drawings(), None);
+        chart.finish_edit(false);
+        assert_eq!(chart.drawings()[0].style, fitil);
+        assert!(!chart.can_undo());
+
+        // Kept changes are saved, and undone in one step.
+        chart.begin_edit(1);
+        chart.edit_open(|drawing| drawing.style.width = 4);
+        chart.edit_open(|drawing| drawing.style.line = LineStyle::Dotted);
+        chart.finish_edit(true);
+        assert!(chart.take_changed_drawings().is_some());
+        assert_eq!(chart.edited_drawing(), None);
+        chart.undo();
+        assert_eq!(chart.drawings()[0].style, fitil);
+        assert!(!chart.can_undo());
+
+        // Settings closed without a change leave nothing to undo.
+        chart.begin_edit(1);
+        chart.finish_edit(true);
+        assert!(!chart.can_undo());
+    }
+
+    #[test]
+    fn new_drawings_start_with_the_saved_look() {
+        use fitil_core::Rgb;
+        let mut chart = chart(&[0, 1, 2, 3]);
+        let mut look = DrawingStyle::of(DrawingKind::TrendLine);
+        look.color = Rgb::hex(0xFF6D00);
+        look.width = 3;
+        chart.set_drawing_defaults(HashMap::from([(DrawingKind::TrendLine, look.clone())]));
+
+        chart.set_tool(Some(DrawingKind::TrendLine));
+        chart.update(ChartMessage::PlacePoint(at(0.0, 10.0)));
+        assert_eq!(chart.draft.as_ref().unwrap().preview().style, look);
+        chart.update(ChartMessage::PlacePoint(at(1.0, 11.0)));
+        assert_eq!(chart.drawings()[0].style, look);
+        // Kinds without a saved look start with Fitil's.
+        assert_eq!(
+            chart.default_style(DrawingKind::Ray),
+            DrawingStyle::of(DrawingKind::Ray)
+        );
+    }
+
+    #[test]
     fn times_and_bars_map_both_ways_across_gaps() {
         // Hours 2 and 3 are missing.
         let chart = chart(&[0, 1, 4, 5]);
@@ -468,8 +617,8 @@ mod tests {
         chart.update(ChartMessage::PlacePoint(at(0.0, 9.0)));
         chart.update(ChartMessage::PlacePoint(at(1.0, 12.0)));
 
-        chart.edit_selected(|drawing| drawing.width = 4);
-        assert_eq!(chart.selected_drawing().unwrap().width, 4);
+        chart.edit_selected(|drawing| drawing.style.width = 4);
+        assert_eq!(chart.selected_drawing().unwrap().style.width, 4);
 
         chart.duplicate_selected();
         assert_eq!(chart.drawings.len(), 2);

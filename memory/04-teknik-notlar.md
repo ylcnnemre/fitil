@@ -195,11 +195,22 @@ Mimari "port ve adaptör" (hexagonal) düzenindedir. Kurallar ve bağımlılık 
 - **Çizim:** Çizimler önbellekli katmana değil, her karede çizilen katmana çizilir. Bu yüzden sürüklerken mumlar yeniden çizilmez. Fiyat ekseni yazıları da bu katmanda; yatay çizgilerin kutuları için yer açılır. Dikey çizgilerin ve kesişim çizgisinin tarihi zaman ekseninde (`line_times`).
 - **Tutamaçlar:** `Shape.handles[i]` her zaman `points[i]`'yi sürükler. Bir şekil tutamacı noktanın kendisinden başka yere koyabilir: düz tepe/dipte 3. nokta düz çizginin ucunda, regresyonda noktalar regresyon çizgisinin üstünde durur.
 - **Geometri (ekran koordinatlarında):** Kanallar ve dirgenler ekran noktalarıyla hesaplanır, böylece log ölçekte de düz görünür. Dirgenlerin orta çizgisi `pitchfork_frame`'de (dışarı açık; `icons.rs` de simgeleri bununla çiziyor). Regresyon ise fiyatlarla hesaplanır (kapanışlar, en küçük kareler, ±2 standart sapma, sapma `n-1`'e bölünür).
+- **Görünüm (`DrawingStyle`, 2 Kasım 2026):** `Drawing { id, kind, points, text, locked, style }`. Renk, kalınlık, çizgi tipi, dolgu (`fill`, `opacity` yüzde), seviyeler (`Level`: değer, renk, açık), `one_color`, `trend` (`TrendLook`), `extend`, `reverse`, `labels` (`LevelLabels`) ve `visibility` hepsi `style`'da. Şablonlar ve varsayılanlar birer `DrawingStyle`; noktaları, metni ve kilidi taşımaz. Türün varsayılanı `DrawingStyle::of(kind)`.
+- **Görünürlük:** `Visibility` birim başına `Option<(from, to)>` tutar (`TimeUnit::ALL` sırasıyla). Sınırlar TradingView gibi: saniye ve dakika 1–59, saat 1–24, gün 1–366, hafta 1–52, ay 1–12. Üst uç sınırdaysa daha uzun zaman dilimleri de dahil (90m). Grafikte `Chart::shows(drawing)`; görünmeyen çizim çizilmez, seçilmez, eksende fiyatı/tarihi çıkmaz.
+- **Kayıt biçimi 2:** `fitil-market/src/drawings.rs`. `SavedStyle` `#[serde(flatten)]` ile çizimin içinde; sadece türün kullandığı alanlar yazılır (`has_fill`, `has_levels`). Eksik alanlar `DrawingStyle::of(kind)`'dan gelir. 1. sürümün düz sayı seviyeleri (`SavedLevel::Plain`) gösterilir, `one_color` açılır, Fitil'in eksik seviyeleri kapalı eklenir. Şablon ve varsayılanlar `{version, style}` olarak `drawing_templates` ve `drawing_defaults` tablolarında (`user.sqlite` göç 3).
+- **Düzenleme penceresi (`fitil-app/src/drawing_dialog.rs`):**
+  - Grafik tarafı bir oturum: `begin_edit(id)` çizimin eski hâlini `editing`'de tutar; `edit_open` değiştirir (geri al kaydı ve kayıt yok); `finish_edit(true)` değiştiyse tek geri alma adımı ekler ve kaydettirir, `finish_edit(false)` eski hâle döner. `set_drawings` oturumu bırakır.
+  - Uygulama tarafı `Dialog::Drawing(DrawingWindow)`: sekme, yazılanlar (`drafts`, okunana kadar), açık palet (`ColorTarget`), şablon menüsü. Değişiklikler `Setting` mesajlarıyla `DrawingWindow::apply` üzerinden gider.
+  - `Fitil::close_dialog` pencere bir çizimin ayarlarıysa iptal eder (Esc, dışarı tıklama, ×, İptal). Esc önce açık paleti ya da şablon menüsünü kapatır.
+  - Palet ve şablon menüsü `flyout` ile açılır; `Menu` overlay'i `operate` iletir, şablon adı kutusu `operation::focus(TEMPLATE_NAME_ID)` ile odaklanır.
+  - Yeni çizimler `Chart::default_style(kind)` ile başlar; varsayılanlar açılışta `load_drawing_looks` ile gelir ve her yeni grafiğe `set_drawing_defaults` ile verilir.
+- **Şekil (`Shape`):** `lines` çizimin renginde; `tinted` her biri kendi renginde ama çizimin kalınlığı ve tipinde (Fib seviyeleri); `trend` kendi rengi ve tipiyle 1 piksel; `areas` her biri kendi renginde, saydam olanlar boyanmaz ama tıklayınca çizimi seçer; `fill` çizimin dolgu rengi.
 - **Yeni çizim türü eklemek:**
-  1. `DrawingKind`'e ekle (`ALL`, `points`, `id`).
+  1. `DrawingKind`'e ekle (`ALL`, `points`, `id`; dolgusu varsa `has_fill`, seviyeleri varsa `has_levels`).
   2. `shapes.rs` içindeki `shape` fonksiyonuna nasıl görüneceğini yaz. Tıklama bulma aynı şekli kullanır.
   3. Bir gruptaysa `fitil-app/src/tools.rs`'te bölümüne ekle ve `icons.rs`'teki `sketch` fonksiyonuna 18×18'lik resmini çiz. Grupsuz araçlar `icons::drawn` içinde bir Lucide simgesi alır.
   4. `drawing-<id>` çevirisini iki dile de ekle. Eksikse test yakalar.
+  5. Kendine özgü ayarları varsa `DrawingStyle`'a ekle, `drawing_dialog.rs`'te Stil sekmesine koy, `SavedStyle`'da sakla.
 - **Araç grupları (`tools.rs`):** `ToolGroup` (şimdilik sadece `Lines`), bölümleri (`Section`: başlık anahtarı ve araçlar), Alt kısayolları (`shortcut`, `by_shortcut`). Grubun düğmesi en son seçilen aracı gösterir (`Fitil::group_tools`), açık menü `Fitil::tool_menu`.
 
 ## Simgeler (Lucide)
