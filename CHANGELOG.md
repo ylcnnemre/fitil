@@ -91,6 +91,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The window is laid out like TradingView: the chart fills it, under a toolbar with the
   symbol, favorite timeframes as buttons, the chart type, scales, indicators and volume.
   The watchlist on the left is replaced by the symbol search window.
+- Candles, volume bars, OHLC bars, indicator columns and dots are drawn one by one, which
+  the renderer prepares several times faster than one shape holding them all. With a few
+  hundred candles on screen a frame of panning or zooming takes about a sixth of the time,
+  so the chart stays smooth zoomed far out and with many indicators.
 
 ### Fixed
 

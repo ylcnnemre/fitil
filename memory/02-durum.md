@@ -1,6 +1,6 @@
 # Şu Anki Durum
 
-**Son güncelleme:** 1 Kasım 2026
+**Son güncelleme:** 2 Kasım 2026
 
 ## Neredeyiz?
 
@@ -24,6 +24,9 @@
   - 10 yeni araç: bilgi çizgisi, trend açısı, kesişim çizgisi, regresyon trendi, düz tepe/dip, ayrık kanal, dirgen, Schiff, modifiye Schiff, iç dirgen.
   - Alt+T/H/J/V/C kısayolları.
   - Kesikli ve noktalı çizgilerdeki fazladan çizgi hatası düzeltildi.
+- **Kaydırma akıcılığı (2 Kasım 2026), kodlandı, proje sahibinin denemesi bekleniyor:**
+  - Mumlar, hacim çubukları, OHLC çubukları, histogram sütunları ve noktalar tek tek çiziliyor. Yaklaşık 560 mumda bir kare release'te 2,3 ms yerine 0,4 ms sürüyor.
+  - Proje sahibine artık release sürüm açılıyor (`target\release\fitil.exe`). Debug sürüm çizimde yaklaşık 10 kat yavaş, takılmanın ana nedeni oydu.
 
 Uygulama şu an şunları gösteriyor:
 - **Üstte araç çubuğu:**
@@ -53,6 +56,8 @@ Uygulama şu an şunları gösteriyor:
   - Önbellekteki mum sayısı. Üzerine gelince önbellek yolu görünür.
 
 ## Proje sahibinin denemesi beklenenler
+
+Akıcılık için (release sürümde): grafiği sağa sola ve yukarı aşağı çekmek, fiyat ve zaman eksenlerini sürüklemek, çok uzaklaştırmak. TradingView kadar akıcı mı?
 
 Açılır menü ve yeni araçlar için (Claude ekrana tıklayamadığı için bunları proje sahibi dener):
 - **Menü:** sol çubuktaki çizgi düğmesine tıklayınca menünün açılması; menüden seçince kapanması; dışarı tıklayınca, Esc'ye basınca ya da düğmeye yeniden tıklayınca kapanması. Seçilen aracın simgesinin düğmede kalması.
@@ -84,6 +89,7 @@ Daha önceki adımlardan, hâlâ denenmemiş olanlar:
 
 ## Açık sorular (proje sahibine sorulacak)
 
+- Grafiği dikey çekerken ilk 12 pikselin yok sayılması kaldırılsın mı? TradingView'da böyle bir bekleme yoksa kaldırılacak (2 Kasım'da soruldu).
 - `iced_test` (iced'in kendi test kütüphanesi, sadece testlerde kullanılır) indirilsin mi?
 - Commit'lerde GitHub'ın gizli e-posta adresi (noreply) kullanılsın mı? (Daha önce önerildi, cevap bekliyor.)
 - GitHub'da özel güvenlik bildirimi (private vulnerability reporting) açılsın mı? (Daha önce önerildi, cevap bekliyor.)

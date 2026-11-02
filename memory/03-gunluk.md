@@ -398,3 +398,40 @@ Geçici satırlar silindi. Proje sahibi test penceresini yine kullandı: grafik 
 Geçici satırlar silindi. Önceki test penceresine (pid 12000) dokunulmadı.
 
 **Testler:** 166 test (`fitil-chart` 34, `fitil-indicators` 30, `fitil-app` 29, `fitil-market` 25, `fitil-core` 16, `fitil-store` 14, `fitil-exchange` 9, `fitil-binance` 9) ve 3 canlı test. fmt ve clippy temiz.
+
+## 2 Kasım 2026
+
+### Kaydırma akıcılığı: ölçüm ve mumları çizme yönteminin değişmesi (kodlandı, proje sahibinin denemesi bekleniyor)
+
+**Nasıl başladı:** Proje sahibi yeni sürümü açtıktan sonra sordu: "x ve y ekseninde grafiği çektiğim zaman TradingView kadar akıcı çalışmıyor sanki, neden olabilir?"
+
+**Ölçüm:** Tıklanamadığı için grafik geçici kodla 8 ms'de bir yarım mum kaydırıldı ve her karenin çizim süresi ölçüldü (yöntem `04-teknik-notlar.md`, "Akıcılığı ölçmek"). Pencere 60 Hz bir ekranda açılıyor, yani her kare 16 ms'den kısa sürmeli. Eski yöntemle:
+
+| Ekrandaki mum | Debug | Release |
+|---|---|---|
+| ~140 (açılıştaki görünüm) | 3,8 ms, saniyede 60 kare | 0,4 ms |
+| ~560 (uzaklaştırınca) | ortalama 27 ms, en kötü 53 ms; saniyede 28–50 kare | 2,3 ms, saniyede 60 kare |
+
+**Bulunan nedenler:**
+1. Proje sahibine debug sürüm açılıyordu. Çizimde yaklaşık 10 kat yavaş. Takılmanın ana nedeni bu: zaman eksenini sürükleyince mumlar sıkışıyor, ekrandaki mum sayısı artıyor ve debug sürüm saniyede 30 kare civarına düşüyor.
+2. Mumlar ve hacim çubukları tek büyük yol olarak dolduruluyordu. lyon'un genel doldurma algoritması parça sayısı arttıkça orantısız yavaşlıyor.
+
+**Yapılanlar:**
+- `fitil-chart/src/draw.rs`: mumların gövdesi ve fitili, hacim çubukları, OHLC çubukları ve histogram sütunları tek tek `fill_rectangle` ile çiziliyor. Parabolic SAR gibi noktalar tek tek daire. Görünüş aynı: fitil yine tam piksele oturan 1 piksellik sütun, OHLC'nin çizgileri eski 1 piksellik çizgilerle aynı yeri kaplıyor. Mumun rengi `candle_color` yardımcısında toplandı.
+- Proje sahibine artık release sürüm açılıyor (`target\release\fitil.exe`).
+
+**Yeni yöntemle ölçüm** (hepsi saniyede 60 kare):
+
+| Ekrandaki mum | Debug | Release |
+|---|---|---|
+| ~140 | 1,1 ms | 0,2 ms |
+| ~560 | 2 ms | 0,4 ms |
+| ~1.130 (en uzak görünüm) | 3,7 ms | 0,8 ms |
+
+**Ekranda doğrulananlar** (test penceresi, önbellek kopyası `perf-data`, geçici `TEMP-VERIFY` satırlarıyla MACD, Hacim ve Parabolic SAR eklendi): mumlar, OHLC çubukları, hacim çubukları, MACD histogramı, Hacim paneli ve SAR noktaları. Büyütülmüş görüntüde fitiller gövdelerin ortasında, OHLC'de açılış solda, kapanış sağda. Geçici satırlar silindi.
+
+**Ölçülemeyen:** Gerçek fare sürüklemesi. Her fare hareketinde pencerenin tamamı yeniden kuruluyor, debug'da bu da yavaş. Proje sahibi release sürümde dener.
+
+**Dikey sürükleme:** Grafiği dikey çekerken ilk 12 piksel bilerek yok sayılıyor (`VERTICAL_DRAG_THRESHOLD`, yatay kaydırırken grafik yanlışlıkla oynamasın diye). Proje sahibine, TradingView'da böyle bir bekleme yoksa kaldırılabileceği söylendi.
+
+**Testler:** 166 test ve 3 canlı test. fmt ve clippy temiz.

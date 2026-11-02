@@ -3,7 +3,7 @@
 use std::ops::RangeInclusive;
 use std::time::{Duration, Instant};
 
-use fitil_core::Anchor;
+use fitil_core::{Anchor, Candle};
 use iced::alignment::{Horizontal, Vertical};
 use iced::mouse;
 use iced::widget::canvas::{self, Action, Event, Frame, Geometry, LineDash, Path, Stroke, Text};
@@ -554,89 +554,74 @@ impl Chart {
         ((self.spacing * 0.7).floor() as f32).max(1.0)
     }
 
+    // Candles, bars and columns are filled one rectangle at a time. Rectangles take the
+    // renderer's quick path, while a path holding them all goes through its general
+    // tessellator, which slows down sharply as the bars grow in number: with a few
+    // hundred on screen, every frame of a pan took several times longer.
+
     fn draw_volume(&self, frame: &mut Frame, layout: &Layout, v: &Visible) {
         if v.max_volume <= 0.0 {
             return;
         }
         let height = f64::from(layout.plot.height) * VOLUME_SHARE;
         let width = self.body_width();
-        for (rising, color) in [(true, UP), (false, DOWN)] {
-            let bars = Path::new(|path| {
-                for index in v.first..=v.last {
-                    let candle = &self.candles[index];
-                    if (candle.close >= candle.open) != rising {
-                        continue;
-                    }
-                    let bar = (candle.volume / v.max_volume * height) as f32;
-                    let x = self.x(layout, index);
-                    path.rectangle(
-                        Point::new(x - width / 2.0, layout.plot.height - bar),
-                        Size::new(width, bar),
-                    );
-                }
-            });
-            frame.fill(&bars, color.scale_alpha(0.25));
+        for index in v.first..=v.last {
+            let candle = &self.candles[index];
+            let bar = (candle.volume / v.max_volume * height) as f32;
+            let x = self.x(layout, index);
+            frame.fill_rectangle(
+                Point::new(x - width / 2.0, layout.plot.height - bar),
+                Size::new(width, bar),
+                candle_color(candle).scale_alpha(0.25),
+            );
         }
     }
 
     fn draw_candles(&self, frame: &mut Frame, layout: &Layout, v: &Visible) {
         let width = self.body_width();
-        for (rising, color) in [(true, UP), (false, DOWN)] {
-            let mut wicks = Vec::new();
-            let bodies = Path::new(|path| {
-                for index in v.first..=v.last {
-                    let candle = &self.candles[index];
-                    if (candle.close >= candle.open) != rising {
-                        continue;
-                    }
-                    let x = self.x(layout, index).round();
-                    wicks.push((
-                        x,
-                        self.y(layout, v, candle.high),
-                        self.y(layout, v, candle.low),
-                    ));
-                    let top = self.y(layout, v, candle.open.max(candle.close));
-                    let bottom = self.y(layout, v, candle.open.min(candle.close));
-                    path.rectangle(
-                        Point::new(x - (width / 2.0).floor(), top),
-                        Size::new(width, (bottom - top).max(1.0)),
-                    );
-                }
-            });
-            let wicks = Path::new(|path| {
-                for (x, high, low) in wicks {
-                    path.move_to(Point::new(x + 0.5, high));
-                    path.line_to(Point::new(x + 0.5, low));
-                }
-            });
-            frame.stroke(&wicks, Stroke::default().with_color(color).with_width(1.0));
+        for index in v.first..=v.last {
+            let candle = &self.candles[index];
+            let color = candle_color(candle);
+            // The wick is one pixel wide, on whole pixels so that it stays sharp.
+            let x = self.x(layout, index).round();
+            let high = self.y(layout, v, candle.high);
+            let low = self.y(layout, v, candle.low);
+            frame.fill_rectangle(Point::new(x, high), Size::new(1.0, low - high), color);
             if width > 2.0 {
-                frame.fill(&bodies, color);
+                let top = self.y(layout, v, candle.open.max(candle.close));
+                let bottom = self.y(layout, v, candle.open.min(candle.close));
+                frame.fill_rectangle(
+                    Point::new(x - (width / 2.0).floor(), top),
+                    Size::new(width, (bottom - top).max(1.0)),
+                    color,
+                );
             }
         }
     }
 
     fn draw_bars(&self, frame: &mut Frame, layout: &Layout, v: &Visible) {
         let tick = (self.body_width() / 2.0).max(1.0);
-        for (rising, color) in [(true, UP), (false, DOWN)] {
-            let bars = Path::new(|path| {
-                for index in v.first..=v.last {
-                    let candle = &self.candles[index];
-                    if (candle.close >= candle.open) != rising {
-                        continue;
-                    }
-                    let x = self.x(layout, index).round() + 0.5;
-                    path.move_to(Point::new(x, self.y(layout, v, candle.high)));
-                    path.line_to(Point::new(x, self.y(layout, v, candle.low)));
-                    let open = self.y(layout, v, candle.open);
-                    path.move_to(Point::new(x - tick, open));
-                    path.line_to(Point::new(x, open));
-                    let close = self.y(layout, v, candle.close);
-                    path.move_to(Point::new(x, close));
-                    path.line_to(Point::new(x + tick, close));
-                }
-            });
-            frame.stroke(&bars, Stroke::default().with_color(color).with_width(1.0));
+        for index in v.first..=v.last {
+            let candle = &self.candles[index];
+            let color = candle_color(candle);
+            // Lines one pixel thick: the bar from the high to the low on whole pixels, the
+            // open's tick to its left and the close's to its right.
+            let x = self.x(layout, index).round();
+            let high = self.y(layout, v, candle.high);
+            let low = self.y(layout, v, candle.low);
+            frame.fill_rectangle(Point::new(x, high), Size::new(1.0, low - high), color);
+            let open = self.y(layout, v, candle.open);
+            frame.fill_rectangle(
+                Point::new(x + 0.5 - tick, open - 0.5),
+                Size::new(tick, 1.0),
+                color,
+            );
+            let close = self.y(layout, v, candle.close);
+            frame.fill_rectangle(
+                Point::new(x + 0.5, close - 0.5),
+                Size::new(tick, 1.0),
+                color,
+            );
         }
     }
 
@@ -739,12 +724,12 @@ impl Chart {
                 );
             }
             PlotStyle::Dots => {
-                let dots = Path::new(|path| {
-                    for (index, value) in points() {
-                        path.circle(Point::new(x(index), y(value)), plot.width + 1.0);
-                    }
-                });
-                frame.fill(&dots, plot.color);
+                // Filled one by one, like the candles: one path holding every dot is slow
+                // to tessellate.
+                for (index, value) in points() {
+                    let dot = Path::circle(Point::new(x(index), y(value)), plot.width + 1.0);
+                    frame.fill(&dot, plot.color);
+                }
             }
             PlotStyle::Histogram(colors) => {
                 let width = self.body_width();
@@ -763,21 +748,19 @@ impl Chart {
                         .get(index)
                         .is_none_or(|candle| candle.close >= candle.open),
                 };
-                for (first_color, color) in [(true, plot.color), (false, other)] {
-                    let bars = Path::new(|path| {
-                        for (index, value) in points() {
-                            if in_plot_color(index, value) != first_color {
-                                continue;
-                            }
-                            let end = y(value);
-                            let (top, bottom) = (end.min(zero), end.max(zero));
-                            path.rectangle(
-                                Point::new(x(index) - width / 2.0, top),
-                                Size::new(width, (bottom - top).max(1.0)),
-                            );
-                        }
-                    });
-                    frame.fill(&bars, color.scale_alpha(alpha));
+                for (index, value) in points() {
+                    let color = if in_plot_color(index, value) {
+                        plot.color
+                    } else {
+                        other
+                    };
+                    let end = y(value);
+                    let (top, bottom) = (end.min(zero), end.max(zero));
+                    frame.fill_rectangle(
+                        Point::new(x(index) - width / 2.0, top),
+                        Size::new(width, (bottom - top).max(1.0)),
+                        color.scale_alpha(alpha),
+                    );
                 }
             }
         }
@@ -876,7 +859,7 @@ impl Chart {
             if !(0.0..=plot.height).contains(&y) {
                 return None;
             }
-            let color = if last.close >= last.open { UP } else { DOWN };
+            let color = candle_color(last);
             let mut lines = vec![self.price_label(v, v.mapper.to_scale(last.close))];
             if self.timeframe.bucket_start(self.now) == last.open_time {
                 let left = self.timeframe.next_bucket(self.now) - self.now;
@@ -1085,16 +1068,11 @@ impl Chart {
                 l.volume,
                 scale::volume(candle.volume, l),
             );
-            let color = if candle.close >= candle.open {
-                UP
-            } else {
-                DOWN
-            };
             legend_line(
                 frame,
                 Point::new(10.0, 30.0),
                 TEXT_SIZE,
-                &[(values, color)],
+                &[(values, candle_color(candle))],
                 backdrop,
             );
             for study in self.overlays() {
@@ -1172,6 +1150,15 @@ fn legend_line(
             ..Text::default()
         });
         x += width + LEGEND_GAP;
+    }
+}
+
+/// Green for a candle that closed at or above its open, red for one that fell.
+fn candle_color(candle: &Candle) -> Color {
+    if candle.close >= candle.open {
+        UP
+    } else {
+        DOWN
     }
 }
 

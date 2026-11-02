@@ -44,6 +44,18 @@ Claude ekranı doğrudan göremez. Arayüzde bir değişiklikten sonra:
 
 **Spot sembol listesi yavaş:** Debug derlemede spot exchangeInfo büyük olduğu için açılışta yaklaşık 10–15 saniye sürüyor. Release derlemede çok daha hızlı.
 
+**Proje sahibine yayın (release) sürümü açılır** (2 Kasım 2026'dan beri):
+- `cargo build --release -p fitil-app`, sonra `target\release\fitil.exe`. İlk derleme 3–4 dakika, sonrakiler yarım dakika civarı.
+- Debug sürüm grafiği çizerken yaklaşık 10 kat yavaş. Proje sahibi akıcılığı onunla değerlendirirse yanlış sonuca varır (2 Kasım'da "TradingView kadar akıcı değil" demesinin ana nedeni buydu).
+- Claude'un kendi ekran denetimleri debug sürümle yapılabilir (`target/verify`), orada hız önemli değil.
+
+**Akıcılığı ölçmek:** Tıklanamadığı için grafik geçici kodla kaydırılır ve kareler ölçülür (`03-gunluk.md`, 2 Kasım 2026):
+- `Program::draw` içinde süre ölçülür, saniyede bir satır bir dosyaya yazılır: kare sayısı, ortalama ve en uzun çizim süresi.
+- `subscription` içinde `iced::time::every(8 ms)` her adımda `ChartMessage::Pan { bars: ±0.5 }` gönderir (saniyede yaklaşık 500 piksel, 3 saniyede bir yön değişir).
+- `Chart::new` içinde başlangıç `spacing` değeri değiştirilerek uzak görünüm denenir (2 → ~560 mum, 1 → ~1.130 mum).
+- Her satır `// TEMP-VERIFY` ile işaretlenir, ölçümden sonra silinir. Debug ve release ayrı ayrı ölçülür. Derleme sürerken ölçme, işlemciyi paylaşır.
+- Pencere 60 Hz ekranda açılıyor, bu yüzden üst sınır saniyede 60 kare.
+
 ## Binance notları
 
 - **REST adresleri:**
@@ -140,6 +152,7 @@ Mimari "port ve adaptör" (hexagonal) düzenindedir. Kurallar ve bağımlılık 
   - Çizim için `Frame::fill_rectangle`, `stroke`, `fill_text` ve `with_clip(rect, |frame| …)` kullanılır.
   - Canvas kendi alanını kendisi kırpmaz. Taşabilecek her şey `with_clip` ile çizilmeli.
   - `canvas::Cache` boyut değişince kendiliğinden yeniden çizer, aksi hâlde `clear()` gerekir.
+  - **Çok sayıda dikdörtgen ya da daire tek `Path`'e konmaz.** `frame.fill(&path)` lyon'un genel doldurma algoritmasını (tessellator) çalıştırır. Algoritma, yolda üst üste binen yükseklikte çok parça olunca orantısız yavaşlar: ~560 mumluk hacim ve gövde yolları bir karede debug'da 27 ms, release'te 2,3 ms sürüyordu. `frame.fill_rectangle` ise hızlı yoldan gider (`tessellate_rectangle`, 4 köşe). Bu yüzden mumlar, hacim, OHLC çubukları ve histogram sütunları tek tek `fill_rectangle` ile, noktalar tek tek `Path::circle` ile çizilir. Bir piksellik çizgiler de dikdörtgendir: tam piksele oturan `(x, y)`, `Size::new(1.0, …)`.
 - **`iced::mouse` modülü Click yardımcısını dışarı açmıyor.** Çift tıklama `draw.rs` içinde zaman ve mesafe kontrolüyle algılanıyor.
 - **Canvas'ta yazılar şekillerin üstünde:** Aynı katmandaki bütün yazılar bütün şekillerden sonra çiziliyor. Önbellekli katmandaki bir yazı, üst katmandaki bir kutunun içinden görünür. Bu yüzden eksen yazıları her karede çizilen katmanda, kutuların altına düşenler atlanıyor.
 - **`with_clip` koordinatları kaydırmaz** (0.14): kırpılmış alanda da mutlak koordinatlarla çizilir.
